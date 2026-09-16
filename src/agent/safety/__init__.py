@@ -1,7 +1,7 @@
 """Safety module: floor guardrails, action taxonomy, and injection tripwires."""
 from src.agent.safety.floor import (
-    FLOOR_VERSION,
     FLOOR_RULES,
+    FLOOR_VERSION,
     ActionClass,
     ActionPayload,
     EmailContext,
@@ -10,6 +10,11 @@ from src.agent.safety.floor import (
     VetoLevel,
     classify_action,
     floor_check,
+)
+from src.agent.safety.injection import (
+    InjectionScanResult,
+    plan_deviation,
+    scan,
 )
 
 __all__ = [
@@ -23,4 +28,7 @@ __all__ = [
     "VetoLevel",
     "classify_action",
     "floor_check",
+    "InjectionScanResult",
+    "plan_deviation",
+    "scan",
 ]

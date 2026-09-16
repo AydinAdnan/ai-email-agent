@@ -9,13 +9,14 @@ from enum import Enum
 import re
 from typing import Any, Callable, Optional, Sequence
 
+from src.agent.safety.injection import plan_deviation, scan
+
 FLOOR_VERSION = "1.0"
 
 
 class ActionClass(str, Enum):
     """Deterministic classification of proposed agent actions.
     
-    Reference: ringg-takehome-design-plan (§5 Layer 1)
     - IRREVERSIBLE_EXTERNAL: Touch third parties or outer world (Max autonomy: ASK)
     - IRREVERSIBLE_INTERNAL: Irrevocable internal operations (NOTIFY minimum; ASK if low conf)
     - REVERSIBLE: Local operations easily undone (SILENT allowed)
@@ -65,6 +66,8 @@ class EmailContext:
     recipients: Sequence[str]
     subject: str
     body: str
+    display_name: str = ""
+    pre_committed_plan: Optional[Sequence[str]] = None
     user_domain: str = "example.com"
 
 
@@ -172,21 +175,7 @@ def classify_action(
     params: dict[str, Any],
     user_domain: str = "example.com"
 ) -> ActionClass:
-    """Deterministically map tool name + parameters to an ActionClass.
-    
-    Evaluation precedence:
-    1. Financial indicators -> IRREVERSIBLE_EXTERNAL
-    2. Outbound sending (send_email / forward):
-       - > 5 recipients -> IRREVERSIBLE_EXTERNAL (mass send)
-       - Any recipient outside user_domain -> IRREVERSIBLE_EXTERNAL
-       - All recipients within user_domain -> IRREVERSIBLE_INTERNAL
-    3. Deletion (delete_email / delete / trash_email):
-       - permanent=True / purge=True -> IRREVERSIBLE_INTERNAL
-       - soft delete / trash -> REVERSIBLE
-    4. Reversible operations (drafts, archive, label, schedule) -> REVERSIBLE
-    5. Read-only queries (read, search, summarize) -> READ_ONLY
-    6. Unrecognized tools -> IRREVERSIBLE_EXTERNAL (safe fallback)
-    """
+    """Deterministically map tool name + parameters to an ActionClass."""
     # 1. Financial check: money manipulation is always highest-risk external
     if _has_financial_intent(tool_name, params):
         return ActionClass.IRREVERSIBLE_EXTERNAL
@@ -247,6 +236,44 @@ class FloorRule:
 
 
 # Rule Evaluators
+def _eval_injection_tripwires(
+    action: ActionPayload,
+    action_class: ActionClass,
+    email: Optional[EmailContext],
+    user_domain: str,
+) -> Optional[tuple[VetoLevel, str]]:
+    """FLR-INJ-001: Prompt injection tripwires in email body or metadata must be escalated."""
+    if email:
+        scan_res = scan(
+            text=f"{email.subject} {email.body}",
+            sender=email.sender,
+            display_name=email.display_name,
+            user_domain=user_domain,
+        )
+        if scan_res.is_injected:
+            return (VetoLevel.ESCALATE, f"Prompt injection tripwire detected: {scan_res.reason}")
+    return None
+
+
+def _eval_plan_deviation(
+    action: ActionPayload,
+    action_class: ActionClass,
+    email: Optional[EmailContext],
+    user_domain: str,
+) -> Optional[tuple[VetoLevel, str]]:
+    """FLR-INJ-002: Actions deviating from pre-committed plan must be escalated."""
+    if email and email.pre_committed_plan is not None:
+        deviated, reason = plan_deviation(
+            action_tool=action.tool_name,
+            action_params=action.params,
+            pre_committed_plan=email.pre_committed_plan,
+            untrusted_body=email.body,
+        )
+        if deviated:
+            return (VetoLevel.ESCALATE, f"Plan deviation detected: {reason}")
+    return None
+
+
 def _eval_money_movement(
     action: ActionPayload,
     action_class: ActionClass,
@@ -329,6 +356,8 @@ def _eval_permanent_deletion(
 
 # Versioned, immutable rule table (evaluated in strict top-down precedence)
 FLOOR_RULES: tuple[FloorRule, ...] = (
+    FloorRule("FLR-INJ-001", "Prompt injection tripwire scanner", _eval_injection_tripwires),
+    FloorRule("FLR-INJ-002", "Plan deviation check", _eval_plan_deviation),
     FloorRule("FLR-001", "Money movement hard block", _eval_money_movement),
     FloorRule("FLR-002", "Credential/account security guard", _eval_credential_security),
     FloorRule("FLR-003", "Unrecognized tool guard", _eval_unknown_tool),
@@ -343,15 +372,7 @@ def floor_check(
     email: Optional[EmailContext] = None,
     user_domain: str = "example.com",
 ) -> SafetyVerdict:
-    """Evaluate a proposed action against the deterministic safety floor.
-    
-    Returns SafetyVerdict with:
-    - veto: bool indicating whether autonomous execution is prevented
-    - veto_level: VetoLevel (NONE, ASK, or ESCALATE)
-    - reason: Human-auditable explanation
-    - rule_id: ID of the triggering rule (or None if permitted)
-    - action_class: Evaluated ActionClass
-    """
+    """Evaluate a proposed action against the deterministic safety floor."""
     action_class = classify_action(action.tool_name, action.params, user_domain=user_domain)
 
     for rule in FLOOR_RULES:
