@@ -1,10 +1,23 @@
-# Python-generated files
+# Python cache
 __pycache__/
-*.py[oc]
+*.py[cod]
+
+# Build artifacts
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
+
+# Environment variables
+.env
 
 # Virtual environments
-.venv
+.venv/
+
+# tool cache
+.pytest_cache/
+.ruff_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
