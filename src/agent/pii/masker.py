@@ -8,11 +8,14 @@ Provides a warm singleton AnalyzerEngine + AnonymizerEngine with:
 - Custom recognizers (Ticket IDs, Project Codenames)
 - Smart Person name cleaning (stripping "Resume -", "CV:", etc.)
 - Per-thread alias & substring deduplication so "Aydin" and "Aydin Adnan" share <PERSON_1>.
+
+Masking is one-way: callers receive masked text only, never the reverse map. The
+reverse map stays in-process, lives under a bounded thread registry, and is read
+back only through get_token_map() or discarded with forget_thread().
 """
-from dataclasses import dataclass, field
 import re
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from presidio_analyzer import (
     AnalyzerEngine,
@@ -23,7 +26,6 @@ from presidio_analyzer import (
 )
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
-
 
 # ============================================================================
 # 1. Custom & Enhanced Recognizers
@@ -226,6 +228,35 @@ def _build_custom_recognizers() -> list[EntityRecognizer]:
     return recognizers
 
 
+# spaCy models to try, most accurate first. en_core_web_lg is locked in uv.lock.
+_SPACY_MODEL_NAMES = ("en_core_web_lg", "en_core_web_sm")
+
+# Threads kept in memory before the oldest registry is evicted.
+_MAX_THREADS = 128
+
+
+def _create_analyzer() -> AnalyzerEngine:
+    """Build the Presidio analyzer, preferring the large spaCy model."""
+    failures: list[str] = []
+    for model_name in _SPACY_MODEL_NAMES:
+        try:
+            engine = NlpEngineProvider(
+                nlp_configuration={
+                    "nlp_engine_name": "spacy",
+                    "models": [{"lang_code": "en", "model_name": model_name}],
+                }
+            ).create_engine()
+        except (ImportError, OSError, ValueError) as exc:
+            failures.append(f"{model_name}: {exc}")
+        else:
+            return AnalyzerEngine(nlp_engine=engine)
+
+    raise RuntimeError(
+        "No usable spaCy model for Presidio. Run `uv sync` to install the pinned "
+        "en_core_web_lg wheel. Failures: " + "; ".join(failures)
+    )
+
+
 # Supported Entities to scan
 TARGET_ENTITIES = [
     "PERSON",
@@ -276,27 +307,10 @@ def _clean_person_name(raw_name: str) -> str:
 class PresidioMasker:
     """Warm singleton wrapper around Presidio Analyzer and Per-Thread Registry."""
 
-    _instance: Optional["PresidioMasker"] = None
+    _instance: "PresidioMasker | None" = None
 
     def __init__(self):
-        provider = NlpEngineProvider(
-            nlp_configuration={
-                "nlp_engine_name": "spacy",
-                "models": [{"lang_code": "en", "model_name": "en_core_web_lg"}],
-            }
-        )
-        try:
-            engine = provider.create_engine()
-        except Exception:
-            provider_sm = NlpEngineProvider(
-                nlp_configuration={
-                    "nlp_engine_name": "spacy",
-                    "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
-                }
-            )
-            engine = provider_sm.create_engine()
-
-        self.analyzer = AnalyzerEngine(nlp_engine=engine)
+        self.analyzer = _create_analyzer()
         self.anonymizer = AnonymizerEngine()
 
         # Add custom recognizers
@@ -315,10 +329,30 @@ class PresidioMasker:
             cls._instance = cls()
         return cls._instance
 
+    def _registry_for(self, thread_id: str) -> tuple[dict[tuple[str, str], str], dict[str, str]]:
+        """Return a thread's registries, evicting the oldest thread past the cap."""
+        if thread_id not in self._thread_registries:
+            while len(self._thread_registries) >= _MAX_THREADS:
+                oldest = next(iter(self._thread_registries))
+                del self._thread_registries[oldest]
+                self._reverse_token_maps.pop(oldest, None)
+            self._thread_registries[thread_id] = {}
+            self._reverse_token_maps[thread_id] = {}
+        return self._thread_registries[thread_id], self._reverse_token_maps[thread_id]
+
+    def forget_thread(self, thread_id: str) -> bool:
+        """Drop a thread's tokens and reverse map; returns whether it existed."""
+        self._reverse_token_maps.pop(thread_id, None)
+        return self._thread_registries.pop(thread_id, None) is not None
+
+    @staticmethod
+    def _token_count(registry: dict[tuple[str, str], str], entity_type: str) -> int:
+        """Count distinct tokens already handed out for one entity type."""
+        return len({token for (entity, _), token in registry.items() if entity == entity_type})
+
     def _match_or_create_person_token(self, thread_id: str, clean_name: str) -> str:
         """Deduplicate person names: match aliases, first names, and full names to one token."""
-        reg = self._thread_registries[thread_id]
-        rev = self._reverse_token_maps[thread_id]
+        reg, rev = self._registry_for(thread_id)
 
         norm_name = clean_name.lower()
 
@@ -339,48 +373,37 @@ class PresidioMasker:
                     return token
 
         # 3. Create a new PERSON token
-        person_count = sum(1 for (ent, _) in reg.keys() if ent == "PERSON") + 1
-        token = f"<PERSON_{person_count}>"
+        token = f"<PERSON_{self._token_count(reg, 'PERSON') + 1}>"
         reg[("PERSON", norm_name)] = token
         rev[token] = clean_name
         return token
 
-    def _get_or_create_token(self, thread_id: str, entity_type: str, raw_val: str) -> tuple[str, str]:
+    def _get_or_create_token(self, thread_id: str, entity_type: str, raw_val: str) -> str:
         """Assign or retrieve a consistent <TYPE_N> token for an entity value within a thread."""
-        if thread_id not in self._thread_registries:
-            self._thread_registries[thread_id] = {}
-            self._reverse_token_maps[thread_id] = {}
-
-        reg = self._thread_registries[thread_id]
-        rev = self._reverse_token_maps[thread_id]
-
         if entity_type == "PERSON":
-            cleaned_person = _clean_person_name(raw_val)
-            token = self._match_or_create_person_token(thread_id, cleaned_person)
-            return token, cleaned_person
+            return self._match_or_create_person_token(thread_id, _clean_person_name(raw_val))
 
+        reg, rev = self._registry_for(thread_id)
         norm_val = raw_val.strip().lower()
         key = (entity_type, norm_val)
 
         if key in reg:
-            return reg[key], raw_val.strip()
+            return reg[key]
 
-        type_count = sum(1 for (ent, _) in reg.keys() if ent == entity_type) + 1
-        token = f"<{entity_type}_{type_count}>"
-
+        token = f"<{entity_type}_{self._token_count(reg, entity_type) + 1}>"
         reg[key] = token
         rev[token] = raw_val.strip()
-        return token, raw_val.strip()
+        return token
 
     def mask_text(
         self,
         text: str,
         thread_id: str = "default",
         language: str = "en",
-    ) -> tuple[str, dict[str, str]]:
+    ) -> str:
         """Mask PII entities in text with consistent <TYPE_N> tokens."""
         if not text:
-            return "", {}
+            return ""
 
         results = self.analyzer.analyze(
             text=text,
@@ -405,11 +428,10 @@ class PresidioMasker:
                     new_end = res.start + suffix_match.start()
                 raw_span = text[new_start:new_end]
 
-            token, _ = self._get_or_create_token(thread_id, res.entity_type, raw_span)
+            token = self._get_or_create_token(thread_id, res.entity_type, raw_span)
             masked_chars[new_start:new_end] = list(token)
 
-        masked_text = "".join(masked_chars)
-        return masked_text, dict(self._reverse_token_maps.get(thread_id, {}))
+        return "".join(masked_chars)
 
     @staticmethod
     def _resolve_overlaps(results: list[RecognizerResult]) -> list[RecognizerResult]:
@@ -444,18 +466,24 @@ def mask_for_llm(
     subject: str,
     body: str,
     thread_id: str = "default",
-) -> tuple[str, str, dict[str, str]]:
-    """Helper used before any LLM model call to sanitize subject and body."""
+) -> tuple[str, str]:
+    """Sanitize subject and body before any model call. Returns masked text only."""
     masker = PresidioMasker.get_instance()
-    masked_subject, _ = masker.mask_text(subject, thread_id=thread_id)
-    masked_body, token_map = masker.mask_text(body, thread_id=thread_id)
-    return masked_subject, masked_body, token_map
+    return (
+        masker.mask_text(subject, thread_id=thread_id),
+        masker.mask_text(body, thread_id=thread_id),
+    )
 
 
 def get_token_map(thread_id: str = "default") -> dict[str, str]:
     """Retrieve the current token to original value map for a thread."""
     masker = PresidioMasker.get_instance()
     return dict(masker._reverse_token_maps.get(thread_id, {}))
+
+
+def forget_thread(thread_id: str = "default") -> bool:
+    """Drop a thread's token registry and reverse map."""
+    return PresidioMasker.get_instance().forget_thread(thread_id)
 
 
 # ============================================================================
@@ -480,7 +508,8 @@ if __name__ == "__main__":
     print(f"\n[2] INPUT BODY:\n    {input_body}")
 
     print("\n[3] RUNNING MASKER...")
-    masked_sub, masked_bod, token_map = mask_for_llm(input_subject, input_body, thread_id=thread_id)
+    masked_sub, masked_bod = mask_for_llm(input_subject, input_body, thread_id=thread_id)
+    token_map = get_token_map(thread_id)
 
     print(f"\n[4] MASKED SUBJECT:\n    {masked_sub}")
     print(f"\n[5] MASKED BODY (SAFE FOR LLM):\n    {masked_bod}")
