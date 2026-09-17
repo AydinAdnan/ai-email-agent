@@ -9,11 +9,11 @@ Covers:
 """
 import json
 from dataclasses import FrozenInstanceError
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from src.agent.dataset import event_from_row
 from src.agent.events import (
     EVENT_SCHEMA_VERSION,
     LEARNABLE_FEEDBACK_KINDS,
@@ -40,69 +40,6 @@ def _load_dataset() -> list[dict]:
     assert DATASET_PATH.exists(), f"dataset missing at {DATASET_PATH}"
     with open(DATASET_PATH, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
-
-
-def _sender(raw: dict) -> SenderIdentity:
-    return SenderIdentity(
-        email=raw["email"],
-        display_name=raw.get("display_name", ""),
-        verified_identity=bool(raw.get("verified_identity", False)),
-    )
-
-
-def _attachment(raw: dict) -> Attachment:
-    return Attachment(
-        filename=raw["filename"],
-        content_type=raw.get("content_type", "application/octet-stream"),
-        text=raw.get("text"),
-        size_bytes=raw.get("size_bytes"),
-        sha256=raw.get("sha256"),
-        contains_pii=raw.get("contains_pii"),
-        contains_financial_data=raw.get("contains_financial_data"),
-    )
-
-
-def _message(raw: dict, thread_id: str, direction: Direction = Direction.INBOUND) -> Message:
-    return Message(
-        message_id=raw["message_id"],
-        thread_id=thread_id,
-        sender=_sender(raw["sender"]),
-        recipients=tuple(raw.get("to") or ()),
-        cc=tuple(raw.get("cc") or ()),
-        direction=direction,
-        subject=raw.get("subject", ""),
-        body=raw.get("body", ""),
-        quoted_text=raw.get("quoted_text"),
-        attachments=tuple(_attachment(a) for a in raw.get("attachments") or ()),
-        sent_at=datetime.fromisoformat(raw["timestamp"].replace("Z", "+00:00"))
-        if raw.get("timestamp")
-        else None,
-    )
-
-
-def _event_from_row(row: dict) -> EmailEvent:
-    """Adapter used only by these tests; Phase 3.2 owns the real manifest loader."""
-    thread_id = row["thread"]["thread_id"]
-    history = tuple(
-        _message(
-            message,
-            thread_id,
-            Direction(message.get("direction", Direction.INBOUND.value)),
-        )
-        for message in row["thread"]["messages_available_before_case"]
-    )
-    return EmailEvent(
-        case_id=row["case_id"],
-        sequence_index=row["sequence_index"],
-        message=_message(row["incoming_email"], thread_id),
-        thread=Thread(
-            thread_id=thread_id,
-            messages_before=history,
-            parent_message_id=row["thread"]["parent_message_id"],
-        ),
-        intent=row["incoming_email"]["intent"],
-        relationship_class=row["incoming_email"]["relationship_class"],
-    )
 
 
 def _event(case_id: str, sequence_index: int, message_id: str, thread_id: str = "th-1") -> EmailEvent:
@@ -361,7 +298,7 @@ def test_dataset_feedback_vocabulary_and_flags_are_representable():
 def test_dataset_rows_convert_to_canonical_events():
     """Real rows (history, attachments, sender identity) fit the models as written."""
     rows = _load_dataset()
-    events = [_event_from_row(row) for row in rows]
+    events = [event_from_row(row) for row in rows]
 
     validate_stream(events)
     assert len(events) == len(rows)
@@ -382,7 +319,7 @@ def test_dataset_rows_convert_to_canonical_events():
 
 def test_dataset_stream_survives_the_ordering_contract():
     """The dataset is in file order already, and its indices are unique and ascending."""
-    events = [_event_from_row(row) for row in _load_dataset()]
+    events = [event_from_row(row) for row in _load_dataset()]
     validate_stream(events)  # raises OutOfOrderEventError / DuplicateEventError otherwise
 
     reversed_stream = list(reversed(events))
