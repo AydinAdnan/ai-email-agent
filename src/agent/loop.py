@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import IO
 
+from agent.autonomy.bandit import Learner
 from agent.autonomy.preferences import RememberedProvider
 from agent.dataset import LaneView
 from agent.gateway import ProposalGateway, ProposalProvider, RuleProvider
@@ -74,6 +75,8 @@ class LoopReport:
     claims: tuple[Claim, ...]
     # The messages a confirmed rule answered in the second pass.
     recalled: tuple[str, ...]
+    # What the calibration counted: the posteriors the router will read.
+    learner: Learner
 
     @property
     def asked_before(self) -> int:
@@ -119,6 +122,7 @@ async def run_loop(
     )
     replies = ScriptedReplies(script)
     queue: asyncio.Queue[str] = asyncio.Queue()
+    learner = Learner()
 
     calibration = await run_simulation(
         view,
@@ -128,6 +132,7 @@ async def run_loop(
         on_interrupt=replies.hook(queue),
         policy=ProposalPolicy(ProposalGateway(inner)),
         store=store,
+        learner=learner,
         window=window,
         trace=trace,
     )
@@ -149,6 +154,7 @@ async def run_loop(
         autonomous=autonomous,
         claims=tuple(store.claims),
         recalled=tuple(sorted(remembered.answered)),
+        learner=learner,
     )
 
 

@@ -510,6 +510,25 @@ def test_an_escalation_and_an_ask_are_not_the_same_wait() -> None:
     assert "approval required" not in block_of(transcript, escalated)
 
 
+def test_a_prompt_no_rule_can_quieten_says_so() -> None:
+    """A user typing rules at an escalation would be teaching the wrong thing."""
+    _, transcript = asyncio.run(run_typed({}, show_labels=True))
+    routes = dict(zip(arrivals(transcript), labelled_routes(transcript), strict=True))
+    asked = next(
+        case for case, route in routes.items() if route == Route.ASK_FIRST_WITH_PREDRAFT.value
+    )
+    escalated = next(case for case, route in routes.items() if route == Route.ESCALATE.value)
+    assert "no rule quietens this one" in block_of(transcript, escalated)
+    assert "no rule quietens this one" not in block_of(transcript, asked)
+
+
+def test_the_summary_says_which_prompts_a_rule_could_quieten() -> None:
+    outcome, transcript = asyncio.run(run_typed({}))
+    assert outcome.quietenable == 3
+    assert outcome.interrupts == 7
+    assert "prompts a rule could quieten=3 kept by the mail itself=4" in transcript
+
+
 def test_the_thread_history_is_shown_as_the_prior_messages() -> None:
     case = next(case for case in Manifest.load(FIXTURE).cases if case.event.thread.messages_before)
     _, transcript = asyncio.run(run_typed({}))

@@ -14,6 +14,7 @@ from typing import IO
 
 from dotenv import load_dotenv
 
+from agent.autonomy.bandit import Learner
 from agent.autonomy.preferences import RememberedProvider
 from agent.dataset import (
     DEFAULT_DATASET_PATH,
@@ -265,6 +266,7 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
         f"{_view_note(args.show_labels)}\n\n"
     )
     sink = TraceSink(args.trace) if args.trace else None
+    learner = None if args.no_learn else Learner()
     try:
         outcome = asyncio.run(
             run_simulation(
@@ -275,6 +277,7 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
                 show_labels=args.show_labels,
                 trace=sink,
                 store=store,
+                learner=learner,
             )
         )
     finally:

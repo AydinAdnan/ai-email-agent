@@ -37,6 +37,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from dataclasses import dataclass, field, replace
 from typing import IO, Any
 
+from agent.autonomy.bandit import Learner
+from agent.autonomy.confidence import Bucket
 from agent.dataset import Case, LaneView
 from agent.events import FeedbackEvent, FeedbackKind, SenderIdentity, is_learnable
 from agent.gateway import NO_ACTION_TOOL
@@ -50,7 +52,13 @@ from agent.memory.claims import Claim, ClaimStore
 from agent.memory.consent import ConsentRequired, session_grant
 from agent.replay import EventStream, SeededClock
 from agent.safety.floor import Route
-from agent.sim.policy import INTERRUPTING_ROUTES, Decision, GoldPolicy, ProposalPolicy
+from agent.sim.policy import (
+    INTERRUPTING_ROUTES,
+    Decision,
+    GoldPolicy,
+    ProposalPolicy,
+    quietenable,
+)
 from agent.sim.reply_tree import ReplyTree, build_reply_tree
 from agent.sim.schedule import WINDOW_SIZE, Window, schedule
 from agent.state import (
@@ -115,6 +123,9 @@ class SimOutcome:
     refusals: list[str] = field(default_factory=list)
     # Rules the user confirmed during the run. Nothing reaches here unconfirmed.
     claims: list[Claim] = field(default_factory=list)
+    # Of the prompts this run asked, how many a rule the user could state would take off
+    # their screen. The rest are kept by the mail itself, and no rule changes them.
+    quietenable: int = 0
 
     @property
     def learnable_feedback(self) -> tuple[FeedbackEvent, ...]:
@@ -147,6 +158,7 @@ class ChatRunner:
         mailbox: SimulatedMailbox | None = None,
         registry: ToolRegistry | None = None,
         store: ClaimStore | None = None,
+        learner: Learner | None = None,
         window: int = WINDOW_SIZE,
         trace: TraceSink | None = None,
     ) -> None:
@@ -163,6 +175,8 @@ class ChatRunner:
         self.registry = registry if registry is not None else build_registry(self.mailbox)
         self.stream = EventStream(SeededClock(seed=seed))
         self.outcome = SimOutcome()
+        # The posteriors this session moves. A run that keeps nothing has no learner at all.
+        self.learner = learner
         self.closed = False
         self.last_decision: Decision | None = None
         self.input_error: str | None = None
@@ -322,6 +336,16 @@ class ChatRunner:
     async def _handle_interrupt(self, index: int, decision: Decision, tree: ReplyTree) -> None:
         self.outcome.interrupts += 1
         self._emit(f"  {_WAIT_WORDS.get(self.wait_code, '[waiting] this one is yours')}")
+        # Whether a rule could take this one off the user's screen is the question they are
+        # about to answer by typing, so it is answered for them first. A mail the persona
+        # has demanded escalation for is not a mail any rule can quieten, and typing one at
+        # it teaches nothing.
+        could_quiet = quietenable(self.view.open(decision.case_id))
+        self.outcome.quietenable += 1 if could_quiet else 0
+        if not could_quiet:
+            self._emit(
+                "        no rule quietens this one: it stays your call, so decide it here"
+            )
         if self.on_interrupt is not None:
             await self.on_interrupt(index, decision)
 
@@ -377,10 +401,14 @@ class ChatRunner:
             # Heard, understood, and not kept: a session without consent for learning
             # still calibrates, it just remembers nothing.
             self._emit(f"        not stored: {refusal}")
-            self._record(claim.quote, claim.source_case_id, kind=reading.kind)
+            self._record(
+                claim.quote, claim.source_case_id, kind=reading.kind, claim=claim, decision=decision
+            )
             return
         self.outcome.claims.append(stored)
-        self._record(claim.quote, claim.source_case_id, kind=reading.kind)
+        self._record(
+            claim.quote, claim.source_case_id, kind=reading.kind, claim=claim, decision=decision
+        )
         self._emit(f"        stored {stored.claim_id}: {stored.describe()}")
 
     def _release(self, decision: Decision) -> None:
@@ -454,25 +482,40 @@ class ChatRunner:
         self._emit(f"        {reading.echo}")
         if reading.claim is not None:
             self._emit("        it needs a confirmed prompt before it becomes a rule")
-            self._record(line, target.case_id)
+            self._record(line, target.case_id, decision=target)
             return
         if reading.kind in {FeedbackKind.APPROVE, FeedbackKind.REJECT}:
             self._emit("        typed before the prompt, so it decided nothing")
-            self._record(line, target.case_id)
+            self._record(line, target.case_id, decision=target)
             return
-        self._record(line, target.case_id, kind=reading.kind)
+        self._record(line, target.case_id, kind=reading.kind, decision=target)
 
-    def _record(self, text: str, case_id: str | None, *, kind: FeedbackKind = FeedbackKind.NONE) -> None:
-        """Record one line. Only a kind the plan calls learnable reaches the learner."""
-        self.outcome.feedback.append(
-            FeedbackEvent(
-                event_id=f"{case_id or 'unbound'}:input:{len(self.outcome.feedback) + 1}",
-                case_id=case_id or "unbound",
-                kind=kind,
-                explicit_for_learning=is_learnable(kind),
-                text=text,
-            )
+    def _record(
+        self,
+        text: str,
+        case_id: str | None,
+        *,
+        kind: FeedbackKind = FeedbackKind.NONE,
+        claim: Claim | None = None,
+        decision: Decision | None = None,
+    ) -> None:
+        """Record one line, and count it if an explicit decision may teach the learner."""
+        event = FeedbackEvent(
+            event_id=f"{case_id or 'unbound'}:input:{len(self.outcome.feedback) + 1}",
+            case_id=case_id or "unbound",
+            kind=kind,
+            explicit_for_learning=is_learnable(kind),
+            text=text,
+            # What the reading asked for, when it asked for anything: the route is the
+            # vote, and the action is the arm a refusal applies to.
+            chosen_route=claim.route if claim is not None else None,
+            chosen_action_id=claim.action_id if claim is not None else None,
+            recorded_at=self.stream.clock.now(),
         )
+        self.outcome.feedback.append(event)
+        target = decision if decision is not None else self.last_decision
+        if self.learner is not None and target is not None:
+            self.learner.observe(event, _bucket_of(target), claim=claim)
 
     async def pump(self, source: AsyncIterator[str]) -> None:
         """Hand typed lines to the chat, and always close the queue when the read ends.
@@ -596,6 +639,19 @@ class ChatRunner:
             f"notifications={self.outcome.effects('notify')}"
         )
         self._emit(f"    claims={len(self.outcome.claims)} learnable_feedback={len(self.outcome.learnable_feedback)}")
+        if self.learner is not None:
+            store = self.learner.store
+            self._emit(
+                f"    posteriors: {len(store.contexts())} context(s) of "
+                f"{len(store.observed())} level(s) counted, updates={self.learner.updates} "
+                f"ignored={self.learner.ignored} refused_arms={self.learner.refusals}"
+            )
+            for bucket in store.contexts()[:3]:
+                self._emit(f"        {bucket.describe()}: {store.posterior(bucket).describe()}")
+        self._emit(
+            f"    prompts a rule could quieten={self.outcome.quietenable} "
+            f"kept by the mail itself={self.outcome.interrupts - self.outcome.quietenable}"
+        )
         self._emit(f"    seed={self.seed} replay_digest={self.outcome.replay_digest[:24]}")
         if self.input_error is not None:
             self._emit(f"    input_error={self.input_error}")
@@ -661,6 +717,16 @@ def _body_lines(body: str, width: int = 88, limit: int = 40) -> list[str]:
     return lines
 
 
+def _bucket_of(decision: Decision) -> Bucket:
+    """The bucket a decision belongs to: the mail's shape, and the work that was proposed."""
+    hints = decision.hints
+    return Bucket(
+        sender=decision.sender,
+        intent=hints.intent if hints is not None else "",
+        action=decision.action_id or "",
+    )
+
+
 async def close_input(queue: asyncio.Queue[Any]) -> None:
     """Tell a scripted run that no further lines are coming (EOF)."""
     await queue.put(_INPUT_CLOSED)
@@ -688,6 +754,7 @@ async def run_simulation(
     window: int = WINDOW_SIZE,
     trace: TraceSink | None = None,
     store: ClaimStore | None = None,
+    learner: Learner | None = None,
 ) -> SimOutcome:
     """Replay a lane through the chat loop, blocking only where the plan says to.
 
@@ -706,6 +773,7 @@ async def run_simulation(
         window=window,
         trace=trace,
         store=store,
+        learner=learner,
     )
     pump: asyncio.Task[None] | None = None
     if input_queue is None:

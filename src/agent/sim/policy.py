@@ -21,7 +21,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.dataset import Case
-from agent.gateway import NO_ACTION_TOOL, Proposal, ProposalError, ProposalGateway, RuleProvider
+from agent.gateway import (
+    NO_ACTION_TOOL,
+    Proposal,
+    ProposalError,
+    ProposalGateway,
+    RuleProvider,
+    persona_demanded_route,
+)
 from agent.safety.floor import (
     ALL_ROUTES,
     ActionPayload,
@@ -92,6 +99,29 @@ def _params_with_case(params: dict[str, Any], case: Case) -> dict[str, Any]:
     enriched.setdefault("email_id", case.event.message.message_id)
     enriched.setdefault("thread_id", case.event.thread.thread_id)
     return enriched
+
+
+def quietenable(case: Case) -> bool:
+    """Whether a rule the user could state would take this mail off their screen.
+
+    Asked by putting the quietest proposal a rule can amount to - silently archive this
+    mail - through the same persona rules and floor a real proposal goes through. A mail
+    the persona has already demanded escalation for is not one any rule can quieten, and
+    saying so at the prompt is what stops a user from typing rules that cannot help.
+    """
+    message = case.event.message
+    hints = triage(message)
+    if persona_demanded_route(message, hints) is Route.ESCALATE:
+        return False
+    proposal = Proposal(
+        route=Route.PROCEED_SILENTLY,
+        action_id="email.archive",
+        tool_name=tool_for_action("email.archive"),
+        params={},
+        rationale="",
+        confidence=1.0,
+    )
+    return not route_decision(case, hints, proposal, "", source="probe").interrupts
 
 
 def strictest_allowed(verdict: SafetyVerdict) -> Route:
@@ -214,5 +244,6 @@ __all__ = [
     "ProposalPolicy",
     "email_context_for",
     "floor_verdict_for",
+    "quietenable",
     "strictest_allowed",
 ]
