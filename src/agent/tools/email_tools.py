@@ -85,7 +85,7 @@ class LabelEmail(Tool):
 
     name: ClassVar[str] = "label"
     action_ids: ClassVar[tuple[str, ...]] = ("email.apply_label", "email.label")
-    proposal_params: ClassVar[str] = 'required: {"label": one label, e.g. "Finance/Cloud"}'
+    proposal_params: ClassVar[str] = 'required: {"label": the folder for this mail; the pipeline decides its value}'
 
     def __init__(self, mailbox: SimulatedMailbox) -> None:
         self.mailbox = mailbox

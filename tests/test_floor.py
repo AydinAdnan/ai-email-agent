@@ -107,6 +107,10 @@ from agent.safety.injection import (
         ("draft_reply", {"body": "Please wire $5,000 to account 12345"}, ActionClass.IRREVERSIBLE_EXTERNAL),
         ("label_email", {"label": "Pay invoice $2,500"}, ActionClass.IRREVERSIBLE_EXTERNAL),
         
+        # A local notification changes nothing outside the assistant
+        ("notify", {"text": "a newsletter arrived"}, ActionClass.REVERSIBLE),
+        ("notify_user", {"text": "a newsletter arrived"}, ActionClass.REVERSIBLE),
+
         # Unknown tool fallback
         ("unknown_custom_tool", {"param": "val"}, ActionClass.IRREVERSIBLE_EXTERNAL),
         ("execute_shell", {"cmd": "ls"}, ActionClass.IRREVERSIBLE_EXTERNAL),
@@ -188,6 +192,14 @@ def test_flr_004_external_send_requires_human_approval():
     assert verdict.veto_level == VetoLevel.ASK
     assert verdict.rule_id == "FLR-004"
     assert verdict.action_class == ActionClass.IRREVERSIBLE_EXTERNAL
+
+
+def test_a_local_notification_keeps_the_notify_route():
+    """An action no class holds is one every proposer gets masked on: notify is local."""
+    verdict = floor_check(ActionPayload(tool_name="notify", params={"text": "a newsletter arrived"}))
+    assert verdict.rule_id is None
+    assert Route.PROCEED_AND_NOTIFY in verdict.allowed_routes
+    assert classify_action("notify", {"text": "a newsletter arrived"}) is ActionClass.REVERSIBLE
 
 
 def test_flr_005_mass_send_requires_human_approval():

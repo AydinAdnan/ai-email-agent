@@ -260,6 +260,41 @@ def test_a_provider_that_misses_a_persona_rule_is_corrected() -> None:
     assert (gateway.repairs, gateway.failures) == (0, 0)
 
 
+def test_a_folder_name_comes_from_the_mail_not_from_the_proposer() -> None:
+    """A small model copies the example it was shown, so the example carries no value."""
+    newsletter = message(
+        "news@engweekly.synthetic.example",
+        display="Engineering Weekly",
+        subject="Engineering Weekly Issue #204: Distributed Systems Patterns",
+        body="Detailed email body according to scenario...",
+    )
+    copied = ScriptedProvider(
+        valid(
+            route="PROCEED_AND_NOTIFY",
+            action_id="email.apply_label",
+            params={"label": "Finance/Cloud"},
+        )
+    )
+    proposal = asyncio.run(ProposalGateway(copied).propose(newsletter, triage(newsletter)))
+    assert triage(newsletter).intent == "newsletter"
+    assert proposal.params == {"label": "Newsletter"}
+
+
+def test_a_folder_nothing_names_is_dropped_rather_than_invented() -> None:
+    """No folder for this mail means a blocked step at the registry, not a made-up one."""
+    scheduling = message("elena@techcorp.synthetic.example")
+    invented = ScriptedProvider(
+        valid(
+            route="PROCEED_SILENTLY",
+            action_id="email.apply_label",
+            params={"label": "Colleague"},
+        )
+    )
+    proposal = asyncio.run(ProposalGateway(invented).propose(scheduling, triage(scheduling)))
+    assert triage(scheduling).intent == "scheduling"
+    assert proposal.params == {}
+
+
 def test_a_persona_rule_leaves_an_ordinary_ask_alone() -> None:
     insider = message("elena@techcorp.synthetic.example", subject="Quick catchup this week?")
     assert persona_demanded_route(insider, triage(insider)) is None

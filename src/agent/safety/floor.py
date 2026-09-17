@@ -268,8 +268,13 @@ def classify_action(
             return ActionClass.IRREVERSIBLE_INTERNAL
         return ActionClass.REVERSIBLE
 
-    # 4. Reversible tools
+    # 4. Reversible tools. A notification is local to the user's own assistant, which is
+    # also how the registry's notify step is treated, so it belongs here: left out, it
+    # fell to the unrecognized-tool fallback and every proposer that named the action
+    # the registry advertises for it had its route masked to ASK.
     if tool_name in {
+        "notify",
+        "notify_user",
         "draft_reply",
         "draft_email",
         "create_draft",

@@ -67,14 +67,15 @@ RESPONSE_FORMAT: Mapping[str, Any] = {
 # tools that actually exist.
 ACTION_VOCABULARY = action_vocabulary()
 
-# One answer to copy the shape of. Cheaper for a small model than reading five
-# descriptions, and it shows what a filled-in ``params`` looks like.
+# One answer to copy the shape of. The folder is written as a placeholder because a
+# concrete one was copied verbatim onto unrelated mails; the pipeline replaces it with
+# the folder it derives, so copying it is harmless either way.
 PROPOSAL_EXAMPLE = json.dumps(
     {
         "route": Route.PROCEED_AND_NOTIFY.value,
         "action_id": "email.apply_label",
-        "params": {"label": "Finance/Cloud"},
-        "rationale": "a cloud bill from a known billing sender",
+        "params": {"label": "<the folder this mail belongs in>"},
+        "rationale": "one short line explaining the route",
         "confidence": 0.7,
     }
 )
@@ -355,6 +356,29 @@ class OpenAICompatibleProvider:
         return response.choices[0].message.content or ""
 
 
+def label_for(hints: Triage) -> str | None:
+    """The folder the pipeline names for this mail, or None when it names none."""
+    chosen = ACTION_BY_INTENT.get(hints.intent)
+    return chosen[1].get("label") if chosen is not None else None
+
+
+def _label_derived(proposal: Proposal, hints: Triage) -> Proposal:
+    """Put the pipeline's own folder on a labelling action, whoever proposed it.
+
+    A folder is a fact about how this pipeline files mail, so it is derived for every
+    provider rather than asked for - a small model copies the example it was shown, and
+    telling it a folder it may not use is not a rule it can keep. When nothing names
+    one, the argument is dropped: the registry then records the step as blocked, which
+    is visible, instead of committing a folder nobody chose.
+    """
+    if proposal.action_id != LABEL_ACTION:
+        return proposal
+    folder = label_for(hints)
+    if folder is None:
+        return replace(proposal, params={})
+    return replace(proposal, params={**proposal.params, "label": folder})
+
+
 def _persona_checked(proposal: Proposal, message: Message, hints: Triage) -> Proposal:
     """Raise a proposal to whatever the persona's hard rules demand, and say so.
 
@@ -382,6 +406,15 @@ def _persona_checked(proposal: Proposal, message: Message, hints: Triage) -> Pro
     return replace(proposal, route=route, rationale=f"{proposal.rationale} | {reason}")
 
 
+# The one action whose argument is a folder name the pipeline owns, not the proposer.
+LABEL_ACTION = "email.apply_label"
+
+
+def _mail_rules(proposal: Proposal, message: Message, hints: Triage) -> Proposal:
+    """Everything the mail decides about a proposal, whoever answered."""
+    return _persona_checked(_label_derived(proposal, hints), message, hints)
+
+
 class ProposalGateway:
     """Turns provider text into a validated proposal, with one repair attempt."""
 
@@ -396,13 +429,13 @@ class ProposalGateway:
         request = ProposalRequest(message=message, hints=hints)
         try:
             first = await self._ask(request)
-            return _persona_checked(parse_proposal(first, provider=self.provider.name), message, hints)
+            return _mail_rules(parse_proposal(first, provider=self.provider.name), message, hints)
         except (ProposalError, TimeoutError) as first_error:
             self.repairs += 1
             repair = ProposalRequest(message=message, hints=hints, repair_note=str(first_error))
             try:
                 second = await self._ask(repair)
-                return _persona_checked(
+                return _mail_rules(
                     parse_proposal(second, provider=self.provider.name), message, hints
                 )
             except (ProposalError, TimeoutError) as second_error:

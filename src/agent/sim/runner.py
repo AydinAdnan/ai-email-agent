@@ -134,6 +134,9 @@ class ChatRunner:
         self.closed = False
         self.last_decision: Decision | None = None
         self.input_error: str | None = None
+        # Why the last decision is waiting, from the code the registry raised: an ASK is
+        # work to release, an escalation is a call nobody but the user can make.
+        self.wait_code = ""
 
     async def run(self) -> SimOutcome:
         """Walk every case in the lane, in sequence order."""
@@ -172,6 +175,7 @@ class ChatRunner:
         Preparing validates without touching anything, so an action that will never be
         authorized - every ASK, every escalation - leaves the mailbox exactly as it was.
         """
+        self.wait_code = ""
         case = self.view.open(decision.case_id)
         prepared = self.registry.prepare(
             case_id=decision.case_id,
@@ -187,11 +191,13 @@ class ChatRunner:
             )
         except ApprovalRequired as waiting:
             # An approval that only the feedback parser (Commit 3.6) can give.
+            self.wait_code = waiting.code
             self.outcome.awaiting_approval.append(prepared)
             self.outcome.refusals.append(f"{decision.case_id}: {waiting}")
             return f"prepared {prepared.summary()} [{waiting.code}: {_REFUSAL_WORDS[waiting.code]}]"
         except AuthorizationRefused as refusal:
             # Escalation: a human decides, so there is nothing to wait for here.
+            self.wait_code = refusal.code
             self.outcome.refusals.append(f"{decision.case_id}: {refusal}")
             return f"nothing prepared [{refusal.code}: {_REFUSAL_WORDS[refusal.code]}]"
 
@@ -201,7 +207,7 @@ class ChatRunner:
 
     async def _handle_interrupt(self, index: int, decision: Decision, tree: ReplyTree) -> None:
         self.outcome.interrupts += 1
-        self._emit("  [reply required]")
+        self._emit(f"  {_WAIT_WORDS.get(self.wait_code, '[waiting] this one is yours')}")
         if self.on_interrupt is not None:
             await self.on_interrupt(index, decision)
 
@@ -372,6 +378,15 @@ class ChatRunner:
         if self.input_error is not None:
             self._emit(f"    input_error={self.input_error}")
 
+
+# What the screen says while a decision waits, keyed by the code the registry raised.
+# An approval is work the user releases; an escalation is a call they own with nothing
+# prepared to release. Both carry one "[waiting]" so a transcript greps as one thing,
+# and they differ after it because they are not the same question.
+_WAIT_WORDS: Mapping[str, str] = {
+    "APPROVAL_REQUIRED": "[waiting] approval required: nothing goes out until you say so",
+    "AUTHORIZATION_REFUSED": "[waiting] escalated: nothing was prepared, this one is your call",
+}
 
 # The default view says what will happen in words, never in the route vocabulary: a
 # route name on screen is the answer key leaking back in through the transcript.

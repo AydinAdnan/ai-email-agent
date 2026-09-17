@@ -245,7 +245,7 @@ def test_only_the_pipeline_routes_that_ask_wait_for_a_reply() -> None:
     marked = [
         case_id
         for case_id, route in zip(arrivals(transcript), labelled_routes(transcript), strict=True)
-        if "[reply required]" in block_of(transcript, case_id)
+        if "[waiting]" in block_of(transcript, case_id)
     ]
     waiting = [
         case_id
@@ -253,7 +253,7 @@ def test_only_the_pipeline_routes_that_ask_wait_for_a_reply() -> None:
         if Route(route) in INTERRUPTING
     ]
     assert marked == waiting
-    assert outcome.interrupts == len(marked) == transcript.count("[reply required]")
+    assert outcome.interrupts == len(marked) == transcript.count("[waiting]")
 
 
 def test_the_reference_policy_reproduces_the_dataset_routes() -> None:
@@ -419,7 +419,20 @@ def test_an_arrival_shows_the_mail_a_production_inbox_shows() -> None:
 def test_a_reply_prompt_is_reported_for_the_case_that_waits() -> None:
     first = interrupting_case_ids()[0]
     _, transcript = asyncio.run(run_typed({}))
-    assert "[reply required]" in block_of(transcript, first)
+    assert "[waiting]" in block_of(transcript, first)
+
+
+def test_an_escalation_and_an_ask_are_not_the_same_wait() -> None:
+    """Only one of the two has something to release, so only one says approval."""
+    _, transcript = asyncio.run(run_typed({}, show_labels=True))
+    routes = dict(zip(arrivals(transcript), labelled_routes(transcript), strict=True))
+    asked = next(
+        case for case, route in routes.items() if route == Route.ASK_FIRST_WITH_PREDRAFT.value
+    )
+    escalated = next(case for case, route in routes.items() if route == Route.ESCALATE.value)
+    assert "[waiting] approval required" in block_of(transcript, asked)
+    assert "[waiting] escalated" in block_of(transcript, escalated)
+    assert "approval required" not in block_of(transcript, escalated)
 
 
 def test_the_thread_history_is_shown_as_the_prior_messages() -> None:
@@ -469,7 +482,7 @@ def test_cli_replays_the_fixture(
     assert main(["sim", "run", "--fixture", str(FIXTURE), "--seed", "7"]) == 0
     transcript = capsys.readouterr().out
     assert len(arrivals(transcript)) == 12
-    assert transcript.count("[reply required]") == len(interrupting_case_ids())
+    assert transcript.count("[waiting]") == len(interrupting_case_ids())
 
 
 def test_cli_seed_flag_changes_the_replay_digest(
