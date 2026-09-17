@@ -12,7 +12,7 @@ from agent.memory.claims import (
     ClaimType,
     ScopeAnchor,
 )
-from agent.memory.consent import session_grant
+from agent.memory.consent import Capability, Grant, session_grant
 from agent.safety.floor import Route
 
 NOW = datetime(2026, 8, 1, 9, 0, tzinfo=UTC)
@@ -38,6 +38,42 @@ def preference(**overrides) -> Claim:
 
 def memory() -> ClaimStore:
     return ClaimStore(grant=session_grant(purpose="test session"))
+
+
+def test_rules_survive_a_restart(tmp_path):
+    """A rule kept in one run is in force in the next one, which is a separate process."""
+    path = tmp_path / "prefs.jsonl"
+    first = ClaimStore(grant=session_grant(purpose="test session"), path=path)
+    rule = replace(preference(), route=Route.PROCEED_SILENTLY, params={"label": "Promotions"})
+    replaced = replace(rule, claim_id="clm-replaced", superseded_by=rule.claim_id)
+    first.store(rule)
+    first.store(replaced)
+    assert first.save() == 2
+
+    reopened = ClaimStore(grant=session_grant(purpose="next session"), path=path)
+    assert reopened.loaded == 2
+    assert reopened.claims == (rule, replaced)
+    # The replaced one is history, not something in force.
+    assert reopened.matching(intent="newsletter") == (rule,)
+
+
+def test_a_store_without_consent_neither_reads_nor_writes(tmp_path):
+    """Consent is what makes a rule usable, not the file being there."""
+    path = tmp_path / "prefs.jsonl"
+    path.write_text("{\n}", encoding="utf-8")
+    store = ClaimStore(grant=Grant(capability=Capability.LEARN), path=path)
+
+    assert store.loaded == 0
+    assert store.save() == 0
+    assert "no consent" in store.refusal
+    assert path.read_text(encoding="utf-8") == "{\n}"
+
+
+def test_a_corrupted_rule_file_fails_loudly(tmp_path):
+    path = tmp_path / "prefs.jsonl"
+    path.write_text('{"claim_id": "clm-1"}\n', encoding="utf-8")
+    with pytest.raises(ClaimError, match="not readable"):
+        ClaimStore(grant=session_grant(purpose="test session"), path=path)
 
 
 def test_a_preference_round_trips_with_its_source():

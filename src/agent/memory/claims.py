@@ -5,8 +5,9 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from agent.memory.consent import Capability, ConsentRequired, Grant
@@ -127,9 +128,59 @@ class ClaimStore:
     check reads.
     """
 
-    def __init__(self, grant: Grant | None = None) -> None:
+    def __init__(self, grant: Grant | None = None, *, path: Path | str | None = None) -> None:
         self.grant = grant if grant is not None else Grant(capability=Capability.LEARN)
+        self.path = Path(path) if path is not None else None
+        # Why a named file was neither read nor written, when consent for learning is
+        # not there. A run reads this out; it does not fail over it.
+        self.refusal = ""
         self._claims: list[Claim] = []
+        self.loaded = self.load()
+
+    def load(self) -> int:
+        """Take up the claims already in the store's file, when consent allows their use."""
+        if self.path is None or not self.path.exists():
+            return 0
+        why = self._why_not_now()
+        if why:
+            self.refusal = why
+            return 0
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ClaimError(f"cannot read the rules in {self.path}: {error}") from error
+        self._claims = [
+            _claim_from_record(json.loads(line), where=self.path)
+            for line in text.splitlines()
+            if line.strip()
+        ]
+        return len(self._claims)
+
+    def save(self) -> int:
+        """Write every claim to the store's file, one JSON object per line.
+
+        The whole table is written, superseded claims included: what was replaced is part
+        of why the rules in force are the rules in force. ponytail: the file is rewritten
+        at the end of a run, so a run that dies mid-lane keeps nothing from that session.
+        """
+        if self.path is None:
+            return 0
+        why = self._why_not_now()
+        if why:
+            self.refusal = why
+            return 0
+        lines = "".join(json.dumps(_claim_record(claim), sort_keys=True) + "\n" for claim in self._claims)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(lines, encoding="utf-8")
+        except OSError as error:
+            raise ClaimError(f"cannot write the rules to {self.path}: {error}") from error
+        return len(self._claims)
+
+    def _why_not_now(self) -> str:
+        """The reason this store may not read or write its file at this moment, or ''."""
+        moment = datetime.now(UTC)
+        return "" if self.may_learn(at=moment) else self.grant.why_not(at=moment)
 
     @property
     def stored_claims(self) -> int:
@@ -186,6 +237,53 @@ def claim_id_for(
         sort_keys=True,
     )
     return f"clm-{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _claim_record(claim: Claim) -> dict[str, Any]:
+    """One claim as a JSON object, enums and the timestamp written out in full."""
+    return {
+        "claim_id": claim.claim_id,
+        "type": claim.type.value,
+        "quote": claim.quote,
+        "source_message_id": claim.source_message_id,
+        "source_case_id": claim.source_case_id,
+        "recorded_at": claim.recorded_at.isoformat(),
+        "scope": {
+            "sender": claim.scope.sender,
+            "domain": claim.scope.domain,
+            "intent": claim.scope.intent,
+        },
+        "scope_anchor": claim.scope_anchor.value,
+        "confidence": claim.confidence,
+        "action_id": claim.action_id,
+        "route": claim.route.value if claim.route is not None else None,
+        "params": dict(claim.params),
+        "starts_after_case_id": claim.starts_after_case_id,
+        "superseded_by": claim.superseded_by,
+    }
+
+
+def _claim_from_record(record: Mapping[str, Any], *, where: Path) -> Claim:
+    """One stored claim, put back through the schema that wrote it."""
+    try:
+        return Claim(
+            claim_id=str(record["claim_id"]),
+            type=ClaimType(str(record["type"])),
+            quote=str(record["quote"]),
+            source_message_id=str(record["source_message_id"]),
+            source_case_id=str(record["source_case_id"]),
+            recorded_at=datetime.fromisoformat(str(record["recorded_at"])),
+            scope=ClaimScope(**dict(record.get("scope") or {})),
+            scope_anchor=ScopeAnchor(str(record["scope_anchor"])),
+            confidence=float(record["confidence"]),
+            action_id=str(record["action_id"]) if record.get("action_id") else None,
+            route=Route(str(record["route"])) if record.get("route") else None,
+            params=dict(record.get("params") or {}),
+            starts_after_case_id=record.get("starts_after_case_id"),
+            superseded_by=record.get("superseded_by"),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ClaimError(f"{where}: a stored rule is not readable: {error}") from error
 
 
 def _bears_on(claim: Claim, *, sender: str, domain: str, intent: str) -> bool:
