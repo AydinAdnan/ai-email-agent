@@ -21,7 +21,7 @@ from agent.dataset import (
     SplitViolation,
 )
 from agent.gateway import ENDPOINTS, ProposalError, ProposalGateway, build_provider
-from agent.graph import GraphError, run_graph
+from agent.graph import GraphError, GraphSession
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
 from agent.trace import TraceError, TraceSink
@@ -71,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "hand the provider the raw mail; the default masks subject and body first, "
             "which is what this switch exists to measure against"
+        ),
+    )
+    walk.add_argument(
+        "--approve",
+        metavar="CASE_ID",
+        help=(
+            "after the run, answer that arrival's held decision with a yes and report "
+            "what it committed (nothing is approved without this flag)"
         ),
     )
     return parser
@@ -201,16 +209,18 @@ def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
         f"provider view: {'masked subject and body' if mask else 'the raw mail'}\n\n"
     )
     sink = TraceSink(args.trace) if args.trace else None
+    session = GraphSession(
+        view,
+        seed=args.seed,
+        gateway=ProposalGateway(provider),
+        mask=mask,
+        trace=sink,
+    )
+    note = ""
     try:
-        outcome = asyncio.run(
-            run_graph(
-                view,
-                seed=args.seed,
-                gateway=ProposalGateway(provider),
-                mask=mask,
-                trace=sink,
-            )
-        )
+        outcome = asyncio.run(session.run())
+        if args.approve:
+            note = _resume_note(session, args.approve)
     finally:
         if sink is not None:
             sink.close()
@@ -226,11 +236,30 @@ def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
         f"\nprocessed={outcome.processed} committed={len(outcome.receipts)} "
         f"held={len(outcome.held)} refused={len(outcome.refusals)}\n"
     )
+    for item in outcome.held:
+        out.write(f"    waiting on you: {item.case_id} {item.digest[:12]} {item.summary()}\n")
     for route, count in sorted(outcome.route_counts.items()):
         out.write(f"    {route:<24} {count}\n")
+    if note:
+        out.write(note)
     if sink is not None:
         out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
     return 0 if outcome.processed == len(cases) else 1
+
+
+def _resume_note(session: GraphSession, case_id: str) -> str:
+    """Answer one held decision with a yes and say what that committed."""
+    approved = {item.case_id: item for item in session.outcome.held}
+    if case_id not in approved:
+        return f"\napprove: {case_id} is not waiting for an answer\n"
+    result = asyncio.run(
+        session.resume(
+            case_id,
+            {"approved_by": "user", "prepared_digest": approved[case_id].digest},
+        )
+    )
+    detail = result.receipt.summary() if result.receipt is not None else result.reason
+    return f"\napprove: {case_id} -> {result.status} ({detail})\n"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

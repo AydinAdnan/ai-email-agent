@@ -9,6 +9,7 @@ from typing import Any
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command, interrupt
 
 from agent.dataset import Case, LaneView
 from agent.events import Message
@@ -27,11 +28,13 @@ from agent.state import (
 )
 from agent.tools.email_tools import SimulatedMailbox, build_registry
 from agent.tools.registry import (
+    Approval,
     ApprovalRequired,
     Authorization,
     AuthorizationRefused,
     PreparedAction,
     Receipt,
+    StaleApproval,
     ToolRegistry,
 )
 from agent.trace import TraceSink
@@ -216,20 +219,63 @@ async def authorize(state: GraphState, context: GraphRuntime) -> GraphState:
     return {"node": "authorize", "interrupt": {}}
 
 
-async def interrupt(state: GraphState, context: GraphRuntime) -> GraphState:
-    """Hold here: the action is prepared and nothing has run. Resume is 5.5's."""
-    code = state.get("interrupt", {}).get("code", "")
-    return {"node": "interrupt", "trace": _note(state, f"held ({code})")}
+async def hold(state: GraphState, context: GraphRuntime) -> GraphState:
+    """Hold here until a human answers, and treat a yes about other work as stale.
+
+    The pause is the framework's interrupt: the decision stays on its thread, so a resume
+    continues from this checkpoint instead of walking the lane again. The digest the
+    answer carries is checked here against the one that was shown, and again by the
+    registry against the action that is about to run.
+    """
+    held = state.get("interrupt") or {}
+    if not held:
+        return {"node": "interrupt"}
+
+    digest = str(held.get("prepared_digest", ""))
+    answer = interrupt(
+        {
+            "case_id": state.get("case_id", ""),
+            "route": state.get("route", ""),
+            "code": held.get("code", ""),
+            "prepared_digest": digest,
+            "summary": state.get("prepared", {}).get("summary", ""),
+        }
+    )
+    if not isinstance(answer, Mapping) or not answer.get("approved_by"):
+        return {
+            "node": "interrupt",
+            "interrupt": {"code": "REJECTED", "prepared_digest": digest},
+            "approval": {},
+            "trace": _note(state, "rejected"),
+        }
+    if str(answer.get("prepared_digest", "")) != digest:
+        return {
+            "node": "interrupt",
+            "interrupt": {"code": StaleApproval.code, "prepared_digest": digest},
+            "approval": {},
+            "trace": _note(state, "stale approval"),
+        }
+    return {
+        "node": "interrupt",
+        "interrupt": {},
+        "approval": {
+            "approved_by": str(answer["approved_by"]),
+            "prepared_digest": digest,
+        },
+        "trace": _note(state, f"approved by {answer['approved_by']}"),
+    }
 
 
 async def commit(state: GraphState, context: GraphRuntime) -> GraphState:
     """The only node that changes anything, and it only ever sees authorized work."""
     case_id = state["case_id"]
-    receipt = context.registry.commit(
-        context.prepared[case_id],
-        context.authorizations[case_id],
-        at=context.clock.now(),
+    prepared = context.prepared.get(case_id)
+    if prepared is None:
+        raise GraphError(f"case {case_id} reached commit with nothing prepared")
+    authorization = context.authorizations.get(case_id) or _authorized_settled(
+        context, state, case_id, prepared
     )
+    receipt = context.registry.commit(prepared, authorization, at=context.clock.now())
     context.receipts[case_id] = receipt
     return {"node": "commit", "receipt": receipt_fields(receipt)}
 
@@ -237,6 +283,24 @@ async def commit(state: GraphState, context: GraphRuntime) -> GraphState:
 async def receipt(state: GraphState, context: GraphRuntime) -> GraphState:
     """The terminal record: one decision, closed."""
     return {"node": "receipt", "trace": _note(state, "closed")}
+
+
+def _authorized_settled(
+    context: GraphRuntime, state: GraphState, case_id: str, prepared: PreparedAction
+) -> Authorization:
+    """Authorize from the state alone, so a decision approved before a crash still runs."""
+    approval = state.get("approval") or {}
+    if not approval:
+        raise GraphError(f"case {case_id} reached commit with no authorization")
+    decision = context.decisions[case_id]
+    return context.registry.authorize(
+        prepared,
+        approval=Approval(
+            prepared_digest=str(approval["prepared_digest"]),
+            approved_by=str(approval["approved_by"]),
+        ),
+        verdict_routes=decision.verdict.allowed_routes,
+    )
 
 
 def _next_after_interrupt(state: GraphState) -> str:
@@ -256,7 +320,7 @@ def build_graph(context: GraphRuntime, *, checkpointer: Any | None = None) -> Co
         ("route", route),
         ("prepare", prepare),
         ("authorize", authorize),
-        ("interrupt", interrupt),
+        ("interrupt", hold),
         ("commit", commit),
         ("receipt", receipt),
     ):
@@ -287,6 +351,211 @@ def _bound(node: Any, context: GraphRuntime) -> Any:
     return bound
 
 
+@dataclass
+class ResumeResult:
+    """What resuming a held decision did, or why the answer could not be used."""
+
+    status: str
+    case_id: str
+    receipt: Receipt | None = None
+    reason: str = ""
+
+    @property
+    def committed(self) -> bool:
+        return self.status == "committed"
+
+
+class GraphSession:
+    """One lane, one compiled graph, one checkpoint thread per decision.
+
+    Holding the session is what makes an interrupt resumable: a paused decision lives on
+    its thread, so resuming continues from that checkpoint instead of walking the lane
+    again. The lane itself is the other half - a resume re-derives the decision from it
+    and will not honour an answer whose work has moved since it was asked for.
+    """
+
+    def __init__(
+        self,
+        view: LaneView,
+        *,
+        seed: int = 7,
+        gateway: ProposalGateway | None = None,
+        registry: ToolRegistry | None = None,
+        mailbox: SimulatedMailbox | None = None,
+        mask: bool = True,
+        known_senders: Mapping[str, str] | None = None,
+        window: int = WINDOW_SIZE,
+        trace: TraceSink | None = None,
+        checkpointer: Any | None = None,
+    ) -> None:
+        self.view = view
+        self.seed = seed
+        self.trace = trace
+        self.deliveries = tuple(
+            case for item in schedule(view.cases, window=window, seed=seed) for case in item.cases
+        )
+        self.context = GraphRuntime(
+            cases={case.case_id: case for case in view.cases},
+            gateway=gateway if gateway is not None else ProposalGateway(RuleProvider()),
+            registry=(
+                registry if registry is not None else build_registry(mailbox or SimulatedMailbox())
+            ),
+            clock=SeededClock(seed=seed),
+            known_senders=dict(known_senders or {}),
+            mask=mask,
+        )
+        self.app = build_graph(self.context, checkpointer=checkpointer)
+        self.outcome = GraphOutcome()
+
+    def thread_for(self, case_id: str) -> str:
+        return f"{self.seed}:{case_id}"
+
+    def _initial(self, case_id: str) -> GraphState:
+        delivered = [case.case_id for case in self.deliveries].index(case_id) + 1
+        return {
+            "case_id": case_id,
+            "lane": self.view.lane.value,
+            "sequence_index": delivered,
+        }
+
+    async def run(self) -> GraphOutcome:
+        """Walk the lane, holding at every decision that needs a human."""
+        for index, case in enumerate(self.deliveries, start=1):
+            config = {"configurable": {"thread_id": self.thread_for(case.case_id)}}
+            state: GraphState = {}
+            try:
+                state = await self.app.ainvoke(self._initial(case.case_id), config)
+            except GraphError:
+                raise
+            except Exception as error:
+                raise GraphError(
+                    f"case {case.case_id} failed in {state.get('node') or 'the graph'}: "
+                    f"{type(error).__name__}: {error}"
+                ) from error
+            self._tally(case.case_id, state, index)
+        return self.outcome
+
+    async def resume(self, case_id: str, answer: Mapping[str, Any] | None) -> ResumeResult:
+        """Answer a held decision, or refuse the answer because the work has moved.
+
+        A resume is only as good as what it is resuming: the same lane re-derives the
+        same decision, and both recorded digests - the mail it saw and the action it
+        prepared - are held against a fresh derivation before anything is committed.
+        """
+        config = {"configurable": {"thread_id": self.thread_for(case_id)}}
+        values = await self._checkpointed(config)
+        if values.get("receipt"):
+            return ResumeResult("NOT_WAITING", case_id, reason="this decision was committed")
+
+        held = dict(values.get("interrupt") or {})
+        settled = dict(values.get("approval") or {})
+        if held.get("code") == AuthorizationRefused.code and not settled:
+            return ResumeResult(
+                AuthorizationRefused.code,
+                case_id,
+                reason="a human decides this one: nothing was prepared to approve",
+            )
+        # What the answer has to refer to: the work that was shown, the work that was
+        # already approved when its commit died, or the work a crash never committed.
+        recorded = str(
+            held.get("prepared_digest")
+            or settled.get("prepared_digest")
+            or (values.get("prepared") or {}).get("digest", "")
+        )
+        if not recorded:
+            return ResumeResult("NOT_WAITING", case_id, reason="this decision never reached one")
+
+        stale = await self._moved_since(case_id, values, recorded)
+        if stale:
+            return ResumeResult(StaleApproval.code, case_id, reason=stale)
+        if not held.get("prepared_digest"):
+            # Decided, and approved or auto-authorized, but never committed: the crash
+            # left the work pending, so there is nothing to ask and nothing to re-decide.
+            return await self._invoke(case_id, config, None)
+        if not answer or not answer.get("approved_by"):
+            return ResumeResult("REJECTED", case_id, reason="nothing was approved")
+        return await self._invoke(case_id, config, Command(resume=dict(answer)))
+
+    async def _checkpointed(self, config: Mapping[str, Any]) -> GraphState:
+        snapshot = await self.app.aget_state(config)
+        if snapshot is None or not snapshot.values:
+            raise GraphError("there is no checkpoint for this decision: nothing to resume")
+        return dict(snapshot.values)
+
+    async def _invoke(
+        self, case_id: str, config: Mapping[str, Any], payload: Command | None
+    ) -> ResumeResult:
+        """Carry a thread past its interrupt, or past the point a crash cut it off at."""
+        try:
+            state = await self.app.ainvoke(payload, config)
+        except StaleApproval as error:
+            return ResumeResult(StaleApproval.code, case_id, reason=str(error))
+        except GraphError:
+            raise
+        except Exception as error:
+            raise GraphError(
+                f"case {case_id} could not be resumed: {type(error).__name__}: {error}"
+            ) from error
+        self._tally(case_id, state, self._initial(case_id)["sequence_index"])
+        receipt = self.context.receipts.get(case_id)
+        if receipt is not None:
+            return ResumeResult("committed", case_id, receipt=receipt)
+        code = str((state.get("interrupt") or {}).get("code", ""))
+        return ResumeResult(code or "NOT_RUN", case_id, reason="nothing was committed")
+
+    async def _moved_since(self, case_id: str, values: GraphState, recorded: str) -> str:
+        """Re-derive the decision and say what changed, or '' when nothing did."""
+        try:
+            fresh = await self.app.ainvoke(
+                self._initial(case_id),
+                {"configurable": {"thread_id": f"{self.thread_for(case_id)}:rederive"}},
+            )
+        except Exception as error:  # noqa: BLE001 - anything that stops the re-derivation
+            # reads the same way here: the answer cannot be honoured, so nothing commits.
+            return f"the decision could not be re-derived: {type(error).__name__}: {error}"
+        if fresh.get("message_digest") != values.get("message_digest"):
+            return "the mail changed since this decision was made"
+        rederived = str((fresh.get("prepared") or {}).get("digest", ""))
+        if rederived != recorded:
+            return (
+                f"the work changed: asked about {recorded[:12]}, "
+                f"it is now {rederived[:12] or 'nothing'}"
+            )
+        return ""
+
+    def _tally(self, case_id: str, state: GraphState, delivered: int) -> None:
+        """Record an arrival once, whether it ran or was resumed."""
+        if case_id not in self.outcome.order:
+            self.outcome.order.append(case_id)
+        self.outcome.nodes[case_id] = list(state.get("trace", []))
+        route_value = state.get("route", "")
+        self.outcome.routes[case_id] = route_value
+        # Counted from the routes rather than accumulated: a resumed decision is tallied
+        # twice, and a route may not be counted twice. ponytail: O(cases) per arrival.
+        counts: dict[str, int] = {}
+        for decided in self.outcome.routes.values():
+            counts[decided] = counts.get(decided, 0) + 1
+        self.outcome.route_counts = counts
+        self.outcome.interrupts.pop(case_id, None)
+        self.outcome.held = [item for item in self.outcome.held if item.case_id != case_id]
+        self.outcome.refusals = [item for item in self.outcome.refusals if case_id not in item]
+        self.outcome.receipts = [item for item in self.outcome.receipts if item.case_id != case_id]
+        self.outcome.processed = len(self.outcome.order)
+
+        if receipt := self.context.receipts.get(case_id):
+            self.outcome.receipts.append(receipt)
+        elif interrupt := state.get("interrupt"):
+            code = str(interrupt.get("code", ""))
+            self.outcome.interrupts[case_id] = code
+            prepared = self.context.prepared.get(case_id)
+            if prepared is not None and code == ApprovalRequired.code:
+                self.outcome.held.append(prepared)
+            else:
+                self.outcome.refusals.append(f"{case_id}: {code}")
+        if self.trace is not None:
+            self.trace.write("decision", state, at=self.context.clock.now())
+
+
 async def run_graph(
     view: LaneView,
     *,
@@ -300,67 +569,28 @@ async def run_graph(
     trace: TraceSink | None = None,
     checkpointer: Any | None = None,
 ) -> GraphOutcome:
-    """Walk a lane through the graph, one decision per checkpoint thread.
-
-    The lane is delivered in the order the seed drew, exactly as the simulator delivers
-    it, so the two paths can be compared arrival by arrival.
-    """
-    deliveries = tuple(
-        case for item in schedule(view.cases, window=window, seed=seed) for case in item.cases
-    )
-    context = GraphRuntime(
-        cases={case.case_id: case for case in view.cases},
-        gateway=gateway if gateway is not None else ProposalGateway(RuleProvider()),
-        registry=registry if registry is not None else build_registry(mailbox or SimulatedMailbox()),
-        clock=SeededClock(seed=seed),
-        known_senders=dict(known_senders or {}),
+    """Walk a lane through the graph, one decision per checkpoint thread."""
+    session = GraphSession(
+        view,
+        seed=seed,
+        gateway=gateway,
+        registry=registry,
+        mailbox=mailbox,
         mask=mask,
+        known_senders=known_senders,
+        window=window,
+        trace=trace,
+        checkpointer=checkpointer,
     )
-    app = build_graph(context, checkpointer=checkpointer)
-    outcome = GraphOutcome()
-    for index, case in enumerate(deliveries, start=1):
-        initial: GraphState = {
-            "case_id": case.case_id,
-            "lane": view.lane.value,
-            "sequence_index": index,
-        }
-        thread = {"configurable": {"thread_id": f"{seed}:{case.case_id}"}}
-        state: GraphState = {}
-        try:
-            state = await app.ainvoke(initial, thread)
-        except GraphError:
-            raise
-        except Exception as error:
-            raise GraphError(
-                f"case {case.case_id} failed in {state.get('node') or 'the graph'}: "
-                f"{type(error).__name__}: {error}"
-            ) from error
-
-        outcome.processed += 1
-        outcome.order.append(case.case_id)
-        outcome.nodes[case.case_id] = list(state.get("trace", []))
-        route_value = state.get("route", "")
-        outcome.routes[case.case_id] = route_value
-        outcome.route_counts[route_value] = outcome.route_counts.get(route_value, 0) + 1
-        if receipt := context.receipts.get(case.case_id):
-            outcome.receipts.append(receipt)
-        elif interrupt := state.get("interrupt"):
-            code = str(interrupt.get("code", ""))
-            outcome.interrupts[case.case_id] = code
-            prepared = context.prepared.get(case.case_id)
-            if prepared is not None and code == ApprovalRequired.code:
-                outcome.held.append(prepared)
-            else:
-                outcome.refusals.append(f"{case.case_id}: {code}")
-        if trace is not None:
-            trace.write("decision", state, at=context.clock.now())
-    return outcome
+    return await session.run()
 
 
 __all__ = [
     "GraphError",
     "GraphOutcome",
     "GraphRuntime",
+    "GraphSession",
+    "ResumeResult",
     "build_graph",
     "run_graph",
 ]

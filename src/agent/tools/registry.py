@@ -166,15 +166,44 @@ class Tool(ABC):
         """Do the work and say what changed. Only ever called by a commit."""
 
 
+class EffectLog:
+    """What each step of each prepared action has already done.
+
+    Keyed by the prepared action's digest and the step's position, which is what makes a
+    crashed commit resumable: the second attempt returns the effects the first one
+    produced instead of applying them again. In-process on purpose - the simulated tools
+    are in memory too, and a real adapter carries its own idempotency key.
+    """
+
+    def __init__(self) -> None:
+        self._applied: dict[str, tuple[Effect, ...]] = {}
+
+    @staticmethod
+    def key(prepared: PreparedAction, index: int) -> str:
+        """One step of one exact action: the same digest and position is the same work."""
+        return f"{prepared.digest}:{index}:{prepared.steps[index].tool}"
+
+    def recall(self, key: str) -> tuple[Effect, ...] | None:
+        """What this step did, if it already ran."""
+        return self._applied.get(key)
+
+    def remember(self, key: str, effects: tuple[Effect, ...]) -> None:
+        self._applied[key] = effects
+
+    def __len__(self) -> int:
+        return len(self._applied)
+
+
 class ToolRegistry:
     """Every tool the agent may hold, plus the three calls that gate one."""
 
-    def __init__(self, tools: Iterable[Tool]) -> None:
+    def __init__(self, tools: Iterable[Tool], *, effects: EffectLog | None = None) -> None:
         self._tools: dict[str, Tool] = {}
         for tool in tools:
             if tool.name in self._tools:
                 raise ToolError(f"two tools are named {tool.name!r}")
             self._tools[tool.name] = tool
+        self.effects = effects if effects is not None else EffectLog()
 
     def tool(self, name: str) -> Tool:
         """One tool by name, or a refusal naming what does exist."""
@@ -302,10 +331,13 @@ class ToolRegistry:
     ) -> Receipt:
         """Run every step and write the one receipt for this action.
 
-        ponytail: the steps run in order with no rollback, so a tool that raises
-        half-way leaves the earlier steps applied. The simulated mailbox cannot lose
-        data this way; real tools need the atomic write and crash recovery that plan
-        Commit 5.5 builds.
+        A step already in the effect log is not run again, so a commit that died part-way
+        and was resumed applies each step exactly once and still returns the receipt the
+        first attempt would have written.
+
+        ponytail: the steps run in order with no rollback, so a tool that raises half-way
+        leaves the earlier steps applied. The log makes that safe to retry; a real tool
+        that cannot be retried needs the compensating write its provider offers.
         """
         if authorization.prepared_digest != prepared.digest:
             raise StaleApproval(
@@ -314,8 +346,15 @@ class ToolRegistry:
             )
 
         effects: list[Effect] = []
-        for step in prepared.steps:
-            effects.extend(self.tool(step.tool).apply(step.params))
+        for index, step in enumerate(prepared.steps):
+            key = self.effects.key(prepared, index)
+            already = self.effects.recall(key)
+            if already is not None:
+                effects.extend(already)
+                continue
+            done = self.tool(step.tool).apply(step.params)
+            self.effects.remember(key, done)
+            effects.extend(done)
 
         return Receipt(
             receipt_id=f"rcpt-{prepared.digest[:12]}",

@@ -39,6 +39,7 @@ class GraphState(TypedDict, total=False):
     prepared: dict[str, Any]
     receipt: dict[str, Any]
     interrupt: dict[str, Any]
+    approval: dict[str, Any]
 
     feedback: list[str]
     claims: list[str]
