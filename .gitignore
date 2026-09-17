@@ -23,5 +23,4 @@ wheels/
 .DS_Store
 Thumbs.db
 
-# Large reference PDFs (keep docs/*.md tracked)
-docs/
+docs

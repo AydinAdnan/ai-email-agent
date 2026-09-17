@@ -8,7 +8,9 @@ Covers:
 - Full adversarial corpus verification: 100% veto on all 30 cases in adversarial_cases.yaml
 - Benign baseline verification: 0% false vetoes on everyday workplace emails
 - Immutability and version guarantees
+- Route vocabulary parity with the dataset's autonomy vocabulary
 """
+import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -452,20 +454,24 @@ def test_reversible_action_keeps_all_four_routes():
     assert verdict.allowed_routes == ALL_ROUTES
 
 
-def test_irreversible_internal_action_masks_silent():
-    """An irreversible internal send keeps NOTIFY, ASK and ESCALATE, never SILENT."""
+def test_irreversible_internal_action_masks_proceed_silently():
+    """An irreversible internal send keeps notify, ask and escalate, never silent."""
     action = ActionPayload("send_email", {"to": "colleague@company.com"})
     verdict = floor_check(action, user_domain="company.com")
     assert verdict.action_class == ActionClass.IRREVERSIBLE_INTERNAL
-    assert Route.SILENT not in verdict.allowed_routes
-    assert verdict.allowed_routes == (Route.NOTIFY, Route.ASK_WITH_PREDRAFT, Route.ESCALATE)
+    assert Route.PROCEED_SILENTLY not in verdict.allowed_routes
+    assert verdict.allowed_routes == (
+        Route.PROCEED_AND_NOTIFY,
+        Route.ASK_FIRST_WITH_PREDRAFT,
+        Route.ESCALATE,
+    )
 
 
 def test_irreversible_external_action_keeps_ask_and_escalate_only():
-    """An external send cannot be silent or notified: ASK or ESCALATE only."""
+    """An external send cannot be silent or notified: ask or escalate only."""
     action = ActionPayload("send_email", {"to": "client@external.com"})
     verdict = floor_check(action, user_domain="company.com")
-    assert verdict.allowed_routes == (Route.ASK_WITH_PREDRAFT, Route.ESCALATE)
+    assert verdict.allowed_routes == (Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE)
 
 
 def test_permanent_deletion_masks_silent_and_notify():
@@ -473,7 +479,7 @@ def test_permanent_deletion_masks_silent_and_notify():
     action = ActionPayload("delete_email", {"email_id": "m-2", "permanent": True})
     verdict = floor_check(action, user_domain="company.com")
     assert verdict.veto_level == VetoLevel.ASK
-    assert verdict.allowed_routes == (Route.ASK_WITH_PREDRAFT, Route.ESCALATE)
+    assert verdict.allowed_routes == (Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE)
 
 
 @pytest.mark.parametrize(
@@ -524,8 +530,8 @@ def test_scheduled_send_never_leaves_silent_available():
     """A deferred external send is fenced exactly like an immediate one."""
     action = ActionPayload("schedule_email", {"to": "client@external.com", "send_at": "tomorrow"})
     verdict = floor_check(action, user_domain="company.com")
-    assert Route.SILENT not in verdict.allowed_routes
-    assert verdict.allowed_routes == (Route.ASK_WITH_PREDRAFT, Route.ESCALATE)
+    assert Route.PROCEED_SILENTLY not in verdict.allowed_routes
+    assert verdict.allowed_routes == (Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE)
 
 
 # ============================================================================
@@ -556,3 +562,44 @@ def test_verdict_immutability():
     )
     with pytest.raises(FrozenInstanceError):
         verdict.veto = True  # type: ignore
+
+
+# ============================================================================
+# 9. Route Vocabulary Parity With The Dataset
+# ============================================================================
+
+DATASET_PATH = Path(__file__).parent.parent / "docs" / "wajo_dataset.jsonl"
+
+
+def test_route_vocabulary_is_the_dataset_vocabulary():
+    """The floor routes ARE the dataset's autonomy vocabulary.
+
+    Adding, renaming or reordering a member has to fail here, so the floor and
+    the dataset can never drift into two vocabularies.
+    """
+    assert {route.value for route in Route} == {
+        "PROCEED_SILENTLY",
+        "PROCEED_AND_NOTIFY",
+        "ASK_FIRST_WITH_PREDRAFT",
+        "ESCALATE",
+    }
+    assert tuple(ALL_ROUTES) == (
+        Route.PROCEED_SILENTLY,
+        Route.PROCEED_AND_NOTIFY,
+        Route.ASK_FIRST_WITH_PREDRAFT,
+        Route.ESCALATE,
+    )
+
+
+def test_every_dataset_route_parses_without_an_adapter():
+    """Gold outcomes and autonomy ceilings are valid Route values as written."""
+    assert DATASET_PATH.exists(), f"dataset missing at {DATASET_PATH}"
+    with open(DATASET_PATH, encoding="utf-8") as f:
+        cases = [json.loads(line) for line in f if line.strip()]
+    assert cases, "dataset is empty"
+
+    seen = set()
+    for case in cases:
+        seen.add(Route(case["gold"]["autonomy_outcome"]))
+        seen.add(Route(case["safety_floor"]["autonomy_ceiling"]))
+    assert seen == set(ALL_ROUTES)

@@ -24,10 +24,10 @@ MASS_SEND_THRESHOLD = 5
 class ActionClass(StrEnum):
     """Deterministic classification of proposed agent actions.
     
-    - IRREVERSIBLE_EXTERNAL: Touch third parties or outer world (Max autonomy: ASK)
-    - IRREVERSIBLE_INTERNAL: Irrevocable internal operations (NOTIFY minimum; ASK if low conf)
-    - REVERSIBLE: Local operations easily undone (SILENT allowed)
-    - READ_ONLY: Passive queries with zero side-effects (SILENT allowed)
+    - IRREVERSIBLE_EXTERNAL: Touch third parties or outer world (max autonomy: ASK_FIRST_WITH_PREDRAFT)
+    - IRREVERSIBLE_INTERNAL: Irrevocable internal operations (PROCEED_AND_NOTIFY minimum)
+    - REVERSIBLE: Local operations easily undone (PROCEED_SILENTLY allowed)
+    - READ_ONLY: Passive queries with zero side-effects (PROCEED_SILENTLY allowed)
     """
     IRREVERSIBLE_EXTERNAL = "IRREVERSIBLE_EXTERNAL"
     IRREVERSIBLE_INTERNAL = "IRREVERSIBLE_INTERNAL"
@@ -51,20 +51,24 @@ class VetoLevel(StrEnum):
 class Route(StrEnum):
     """The four autonomy outcomes a candidate action can be routed to.
 
-    SILENT and NOTIFY act without interrupting the user; ASK_WITH_PREDRAFT
-    interrupts with an exact draft; ESCALATE takes no action and hands the email
-    to the user. Only the floor decides which of the four stay available.
+    PROCEED_SILENTLY and PROCEED_AND_NOTIFY act without interrupting the user;
+    ASK_FIRST_WITH_PREDRAFT interrupts with an exact draft; ESCALATE takes no
+    action and hands the email to the user. Only the floor decides which of the
+    four stay available.
+
+    The values are the dataset's autonomy vocabulary verbatim, so events, gold
+    labels and report lanes parse them without a translation table.
     """
-    SILENT = "SILENT"
-    NOTIFY = "NOTIFY"
-    ASK_WITH_PREDRAFT = "ASK_WITH_PREDRAFT"
+    PROCEED_SILENTLY = "PROCEED_SILENTLY"
+    PROCEED_AND_NOTIFY = "PROCEED_AND_NOTIFY"
+    ASK_FIRST_WITH_PREDRAFT = "ASK_FIRST_WITH_PREDRAFT"
     ESCALATE = "ESCALATE"
 
 
 ALL_ROUTES: tuple[Route, ...] = (
-    Route.SILENT,
-    Route.NOTIFY,
-    Route.ASK_WITH_PREDRAFT,
+    Route.PROCEED_SILENTLY,
+    Route.PROCEED_AND_NOTIFY,
+    Route.ASK_FIRST_WITH_PREDRAFT,
     Route.ESCALATE,
 )
 
@@ -72,8 +76,12 @@ ALL_ROUTES: tuple[Route, ...] = (
 _CLASS_ROUTE_CEILING: dict[ActionClass, tuple[Route, ...]] = {
     ActionClass.READ_ONLY: ALL_ROUTES,
     ActionClass.REVERSIBLE: ALL_ROUTES,
-    ActionClass.IRREVERSIBLE_INTERNAL: (Route.NOTIFY, Route.ASK_WITH_PREDRAFT, Route.ESCALATE),
-    ActionClass.IRREVERSIBLE_EXTERNAL: (Route.ASK_WITH_PREDRAFT, Route.ESCALATE),
+    ActionClass.IRREVERSIBLE_INTERNAL: (
+        Route.PROCEED_AND_NOTIFY,
+        Route.ASK_FIRST_WITH_PREDRAFT,
+        Route.ESCALATE,
+    ),
+    ActionClass.IRREVERSIBLE_EXTERNAL: (Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE),
 }
 
 
@@ -427,7 +435,7 @@ def _mask_routes(action_class: ActionClass, veto_level: VetoLevel) -> tuple[Rout
     if veto_level is VetoLevel.ASK:
         # A rule that demands approval also removes acting-then-notifying
         return tuple(
-            route for route in allowed if route in (Route.ASK_WITH_PREDRAFT, Route.ESCALATE)
+            route for route in allowed if route in (Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE)
         )
     return allowed
 
@@ -440,8 +448,8 @@ def floor_check(
     """Evaluate a proposed action against the deterministic safety floor.
 
     Returns the surviving routes as well as the veto: an action class that may
-    never be silent keeps NOTIFY, ASK_WITH_PREDRAFT and ESCALATE, a fenced
-    action keeps ESCALATE alone. ``user_domain`` falls back to the domain carried
+    never be silent keeps PROCEED_AND_NOTIFY, ASK_FIRST_WITH_PREDRAFT and
+    ESCALATE, a fenced action keeps ESCALATE alone. ``user_domain`` falls back to the domain carried
     by the email, then to DEFAULT_USER_DOMAIN.
     """
     effective_domain = user_domain or (email.user_domain if email else DEFAULT_USER_DOMAIN)
