@@ -24,7 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from src.agent.events import (
+from agent.events import (
     Attachment,
     Direction,
     EmailEvent,
@@ -72,8 +72,23 @@ class SplitViolation(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CaseLabels:
+    """The dataset's ground truth for a case.
+
+    These are answers: what the case was designed to be, and the route it was designed
+    to deserve. Scoring code reads them; nothing on a decision path may, which is why
+    they hang off the case rather than the event.
+    """
+
+    intent: str
+    relationship_class: str
+    action_id: str
+    autonomy_outcome: str
+
+
+@dataclass(frozen=True)
 class Case:
-    """One dataset row: its lane, its canonical event, and its raw record."""
+    """One dataset row: its lane, its canonical event, its labels and the raw record."""
 
     case_id: str
     lane: Lane
@@ -81,6 +96,18 @@ class Case:
     sequence_index: int
     event: EmailEvent
     row: Mapping[str, Any]
+
+    @property
+    def labels(self) -> CaseLabels:
+        """The dataset's answer for this case, for scoring and debugging only."""
+        incoming = self.row["incoming_email"]
+        gold = self.row["gold"]
+        return CaseLabels(
+            intent=incoming["intent"],
+            relationship_class=incoming["relationship_class"],
+            action_id=gold["action_id"],
+            autonomy_outcome=gold["autonomy_outcome"],
+        )
 
 
 def _sender(raw: Mapping[str, Any]) -> SenderIdentity:
@@ -150,8 +177,6 @@ def event_from_row(row: Mapping[str, Any]) -> EmailEvent:
             ),
             parent_message_id=thread.get("parent_message_id"),
         ),
-        intent=row["incoming_email"]["intent"],
-        relationship_class=row["incoming_email"]["relationship_class"],
     )
 
 
@@ -297,6 +322,7 @@ __all__ = [
     "LEARNABLE_LANES",
     "SPLIT_TO_LANE",
     "Case",
+    "CaseLabels",
     "Lane",
     "LaneView",
     "Manifest",

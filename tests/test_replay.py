@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from src.agent.dataset import (
+from agent.dataset import (
     DEFAULT_DATASET_PATH,
     LEARNABLE_LANES,
     SPLIT_TO_LANE,
@@ -24,8 +24,8 @@ from src.agent.dataset import (
     SplitViolation,
     event_from_row,
 )
-from src.agent.events import DuplicateEventError, EmailEvent, OutOfOrderEventError
-from src.agent.replay import DATASET_EPOCH, EventStream, SeededClock, replay
+from agent.events import DuplicateEventError, EmailEvent, OutOfOrderEventError
+from agent.replay import DATASET_EPOCH, EventStream, SeededClock, replay
 
 SEED = 7
 
@@ -193,6 +193,18 @@ def test_lane_counts_are_reported(manifest):
 def test_dataset_digest_matches_the_file(manifest):
     """A replay can name the exact dataset it ran against."""
     assert manifest.dataset_digest == hashlib.sha256(DEFAULT_DATASET_PATH.read_bytes()).hexdigest()
+
+
+def test_labels_live_on_the_case_and_not_on_the_event(manifest):
+    """Ground truth has to be reachable by scoring and out of reach of a decision."""
+    for case in manifest.cases:
+        incoming = case.row["incoming_email"]
+        gold = case.row["gold"]
+        assert case.labels.intent == incoming["intent"]
+        assert case.labels.relationship_class == incoming["relationship_class"]
+        assert case.labels.autonomy_outcome == gold["autonomy_outcome"]
+        assert not hasattr(case.event, "intent")
+        assert not hasattr(case.event, "relationship_class")
 
 
 def test_lanes_split_the_dataset_without_overlap(manifest):

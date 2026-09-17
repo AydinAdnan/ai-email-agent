@@ -1,5 +1,5 @@
 """PII masking and anonymization package."""
-from src.agent.pii.masker import (
+from agent.pii.masker import (
     PresidioMasker,
     forget_thread,
     get_token_map,

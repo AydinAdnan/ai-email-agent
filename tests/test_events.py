@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from src.agent.dataset import event_from_row
-from src.agent.events import (
+from agent.dataset import event_from_row
+from agent.events import (
     EVENT_SCHEMA_VERSION,
     LEARNABLE_FEEDBACK_KINDS,
     Attachment,
@@ -31,7 +31,7 @@ from src.agent.events import (
     is_learnable,
     validate_stream,
 )
-from src.agent.safety.floor import Route
+from agent.safety.floor import Route
 
 DATASET_PATH = Path(__file__).parent.parent / "docs" / "wajo_dataset.jsonl"
 
@@ -52,8 +52,6 @@ def _event(case_id: str, sequence_index: int, message_id: str, thread_id: str = 
             sender=SenderIdentity(email="news@engweekly.synthetic.example"),
         ),
         thread=Thread(thread_id=thread_id),
-        intent="newsletter",
-        relationship_class="newsletter/marketing",
     )
 
 
@@ -90,16 +88,12 @@ def test_models_are_frozen():
             sequence_index=1,
             message=Message("m-1", "th-1", SenderIdentity(email="a@b.test")),
             thread=Thread("th-1"),
-            intent="newsletter",
-            relationship_class="vendor",
         ),
         lambda: EmailEvent(
             case_id="WAJO-0001",
             sequence_index=0,
             message=Message("m-1", "th-1", SenderIdentity(email="a@b.test")),
             thread=Thread("th-1"),
-            intent="newsletter",
-            relationship_class="vendor",
         ),
         lambda: Message(
             message_id="m-1",
@@ -168,9 +162,14 @@ def test_event_rejects_a_message_that_does_not_belong_to_its_thread():
                 sender=SenderIdentity(email="news@engweekly.synthetic.example"),
             ),
             thread=Thread(thread_id="th-1"),
-            intent="newsletter",
-            relationship_class="newsletter/marketing",
         )
+
+
+def test_an_event_carries_no_classification():
+    """The dataset's answers live on the Case, so a decision path cannot read them."""
+    event = _event("WAJO-0001", 1, "m-1")
+    for leaked in ("intent", "relationship_class", "gold", "autonomy_outcome"):
+        assert not hasattr(event, leaked), f"EmailEvent must not carry {leaked}"
 
 
 # ============================================================================

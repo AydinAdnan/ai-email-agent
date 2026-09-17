@@ -1,5 +1,5 @@
 """Unit tests for Presidio PII Masker (Phase 2)."""
-from src.agent.pii.masker import (
+from agent.pii.masker import (
     _MAX_THREADS,
     PresidioMasker,
     forget_thread,

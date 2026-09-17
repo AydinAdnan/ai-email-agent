@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.agent.safety.floor import (
+from agent.safety.floor import (
     ALL_ROUTES,
     FLOOR_RULES,
     FLOOR_VERSION,
@@ -30,7 +30,7 @@ from src.agent.safety.floor import (
     classify_action,
     floor_check,
 )
-from src.agent.safety.injection import (
+from agent.safety.injection import (
     plan_deviation,
     scan,
 )

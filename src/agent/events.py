@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from src.agent.safety.floor import Route
+from agent.safety.floor import Route
 
 EVENT_SCHEMA_VERSION = "1"
 
@@ -183,20 +183,22 @@ class Thread:
 
 @dataclass(frozen=True)
 class EmailEvent:
-    """An email arriving for a case: the unit the graph consumes and replays."""
+    """An email arriving for a case: the unit the graph consumes and replays.
+
+    Only what arrives is here - ids, the message, its thread. The dataset's intent
+    and relationship class used to ride along, which handed every downstream decision
+    the answer it was supposed to work out; they now live on the ``Case``, where
+    scoring code can read them and a classification path cannot.
+    """
 
     case_id: str
     sequence_index: int
     message: Message
     thread: Thread
-    intent: str
-    relationship_class: str
     schema_version: str = EVENT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         _require_text(self.case_id, "EmailEvent.case_id")
-        _require_text(self.intent, "EmailEvent.intent")
-        _require_text(self.relationship_class, "EmailEvent.relationship_class")
         if self.sequence_index < 1:
             raise EventValidationError("EmailEvent.sequence_index starts at 1")
         if not isinstance(self.message, Message) or not isinstance(self.thread, Thread):

@@ -12,7 +12,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from src.agent.events import EmailEvent, validate_stream
+from agent.events import EmailEvent, validate_stream
 
 # The dataset's first arrival, so simulated processing time lines up with it.
 DATASET_EPOCH = datetime(2026, 8, 1, 8, 15, tzinfo=UTC)

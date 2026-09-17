@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from src.agent.safety.injection import plan_deviation, scan
+from agent.safety.injection import plan_deviation, scan
 
 FLOOR_VERSION = "1.0"
 
