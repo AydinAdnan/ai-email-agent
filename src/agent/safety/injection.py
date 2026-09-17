@@ -3,9 +3,10 @@
 Zero LLM dependence — pure deterministic heuristics and pattern matching.
 """
 import base64
-from dataclasses import dataclass
 import re
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
 
 # Zero-width / invisible characters used for steganographic smuggling
 ZERO_WIDTH_CHARS = ("\u200b", "\u200c", "\u200d", "\ufeff", "\u200e", "\u200f")
@@ -62,21 +63,25 @@ class InjectionScanResult:
     reason: str
 
 
-def _check_base64_injection(text: str) -> Optional[str]:
+def _decode_base64_candidate(candidate: str) -> str | None:
+    """Return the decoded text of a base64 candidate, or None when it is not valid base64."""
+    try:
+        decoded = base64.b64decode(candidate, validate=True)
+    except ValueError:
+        return None
+    return decoded.decode("utf-8", errors="ignore").strip() or None
+
+
+def _check_base64_injection(text: str) -> str | None:
     """Inspect text for embedded base64 payloads that decode into control instructions."""
-    candidates = _BASE64_CANDIDATE_RE.findall(text)
-    for cand in candidates:
-        try:
-            decoded_bytes = base64.b64decode(cand, validate=True)
-            decoded_text = decoded_bytes.decode("utf-8", errors="ignore").strip()
-            if len(decoded_text) >= 8 and _COMPILED_INJECTION_RE.search(decoded_text):
-                return f"Base64 encoded instruction detected ('{decoded_text[:40]}...')"
-        except Exception:
-            continue
+    for candidate in _BASE64_CANDIDATE_RE.findall(text):
+        decoded_text = _decode_base64_candidate(candidate)
+        if decoded_text and len(decoded_text) >= 8 and _COMPILED_INJECTION_RE.search(decoded_text):
+            return f"Base64 encoded instruction detected ('{decoded_text[:40]}...')"
     return None
 
 
-def _check_zero_width_chars(text: str) -> Optional[str]:
+def _check_zero_width_chars(text: str) -> str | None:
     """Detect presence of invisible zero-width characters used for steganography."""
     count = sum(text.count(ch) for ch in ZERO_WIDTH_CHARS)
     if count > 0:
@@ -84,22 +89,31 @@ def _check_zero_width_chars(text: str) -> Optional[str]:
     return None
 
 
-def _check_authority_spoofing(
+def _check_authority_claims(
     sender: str,
     display_name: str,
-    user_domain: str
-) -> Optional[str]:
-    """Flag if an external sender claims sensitive internal authority in display name."""
-    if not display_name or not sender:
+    user_domain: str,
+) -> str | None:
+    """Flag authority claims whose backing identity is external or unverifiable.
+
+    A display name is not authority. When an email claims an internal role we can
+    only accept it if the sender address proves the same domain; an external
+    domain is a spoof and a missing or unparseable sender is unresolved.
+    """
+    if not display_name or not _AUTHORITY_ROLE_PATTERNS.search(display_name):
         return None
-        
+
     sender_domain = sender.split("@")[-1].strip().lower() if "@" in sender else ""
-    if sender_domain and sender_domain != user_domain.strip().lower():
-        if _AUTHORITY_ROLE_PATTERNS.search(display_name):
-            return (
-                f"Authority claim mismatch: external sender '{sender}' "
-                f"claims internal role '{display_name}'"
-            )
+    if not sender_domain:
+        return (
+            f"Unresolved authority: display name '{display_name}' claims an internal role "
+            "but the sender identity cannot be verified"
+        )
+    if sender_domain != user_domain.strip().lower():
+        return (
+            f"Authority claim mismatch: external sender '{sender}' "
+            f"claims internal role '{display_name}'"
+        )
     return None
 
 
@@ -129,8 +143,8 @@ def scan(
     if b64_signal:
         signals.append(b64_signal)
 
-    # 4. Check for display-name vs domain authority spoofing
-    spoof_signal = _check_authority_spoofing(sender, display_name, user_domain)
+    # 4. Check for display-name vs domain authority claims
+    spoof_signal = _check_authority_claims(sender, display_name, user_domain)
     if spoof_signal:
         signals.append(spoof_signal)
 
@@ -151,7 +165,7 @@ def scan(
 def plan_deviation(
     action_tool: str,
     action_params: dict[str, Any],
-    pre_committed_plan: Optional[Sequence[str]] = None,
+    pre_committed_plan: Sequence[str] | None = None,
     untrusted_body: str = "",
 ) -> tuple[bool, str]:
     """Verify that a proposed tool action conforms to the pre-committed triage plan.
