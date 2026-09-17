@@ -8,7 +8,10 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import IO
+
+from dotenv import load_dotenv
 
 from agent.dataset import (
     DEFAULT_DATASET_PATH,
@@ -17,7 +20,7 @@ from agent.dataset import (
     ManifestError,
     SplitViolation,
 )
-from agent.gateway import ProposalError, ProposalGateway, build_provider
+from agent.gateway import ENDPOINTS, ProposalError, ProposalGateway, build_provider
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
 
@@ -68,9 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--provider",
-        choices=["rules", "openai"],
+        choices=["rules", *ENDPOINTS],
         default="rules",
-        help="who proposes: the offline rule stand-in, or a model when OPENAI_API_KEY is set",
+        help=(
+            "who proposes: the offline rule stand-in, or a model endpoint "
+            "(its key goes in .env at the repository root)"
+        ),
+    )
+    run.add_argument(
+        "--model",
+        help="model id to use; falls back to WAJO_MODEL, then the endpoint's default",
     )
     run.add_argument(
         "--lane",
@@ -84,21 +94,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _view_note(show_labels: bool, policy: str, provider: str) -> str:
+def _view_note(show_labels: bool) -> str:
     """Say what the reader is looking at, since labels change the calibration."""
     if show_labels:
         return "labels are on: each arrival carries the dataset's answer next to the pipeline's"
-    source = (
-        "the dataset's labels (reference)" if policy == "labels" else f"the {provider} proposal"
-    )
-    return f"each arrival is shown as mail, with routes from {source}"
+    return "each arrival is shown as mail: sender, subject and body only"
 
 
-def _policy(args: argparse.Namespace) -> DecisionSource:
-    """Pick the decision source. Reading labels is a reference mode, not the default."""
+def _policy(args: argparse.Namespace) -> tuple[DecisionSource, str]:
+    """Pick the decision source and name it. Labels are a reference mode, not the default."""
     if args.policy == "labels":
-        return GoldPolicy()
-    return ProposalPolicy(ProposalGateway(build_provider(args.provider)))
+        return GoldPolicy(), "the dataset's labels (reference)"
+    provider = build_provider(args.provider, model=args.model)
+    label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
+    return ProposalPolicy(ProposalGateway(provider)), f"the {label} proposal"
 
 
 def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
@@ -108,15 +117,16 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
     )
     view = manifest.view(Lane(args.lane))
     cases = view.cases
+    policy, source = _policy(args)
     out.write(
         f"fixture: {manifest.source}\n"
         f"lane: {view.lane.value}  cases: {len(cases)}  seed: {args.seed}\n"
         f"digest: {manifest.dataset_digest[:16]}\n"
+        f"proposal source: {source}\n"
         "type a line when a decision waits for you; lines already typed are "
         "corrections, bound to the decision they followed\n"
-        f"{_view_note(args.show_labels, args.policy, args.provider)}\n\n"
+        f"{_view_note(args.show_labels)}\n\n"
     )
-    policy = _policy(args)
     outcome = asyncio.run(
         run_simulation(
             view, seed=args.seed, out=out, policy=policy, show_labels=args.show_labels
@@ -127,6 +137,11 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``wajo`` console script."""
+    # A key in .env is what makes --provider openrouter runnable; without this the file
+    # sits there looking authoritative while the provider reports no key. The path is
+    # named rather than discovered: this file lives two levels below the repository
+    # root, and a search from the caller's frame finds a .env somewhere else or none.
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     args = build_parser().parse_args(argv)
     out = sys.stdout
     if (args.command, getattr(args, "sim_command", None)) == ("sim", "run"):

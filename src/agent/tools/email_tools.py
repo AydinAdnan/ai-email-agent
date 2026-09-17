@@ -67,6 +67,7 @@ class ReadEmail(Tool):
 
     name: ClassVar[str] = "read_email"
     action_ids: ClassVar[tuple[str, ...]] = ("email.read", "email.get")
+    proposal_params: ClassVar[str] = "required: none"
 
     def __init__(self, mailbox: SimulatedMailbox) -> None:
         self.mailbox = mailbox
@@ -84,6 +85,7 @@ class LabelEmail(Tool):
 
     name: ClassVar[str] = "label"
     action_ids: ClassVar[tuple[str, ...]] = ("email.apply_label", "email.label")
+    proposal_params: ClassVar[str] = 'required: {"label": one label, e.g. "Finance/Cloud"}'
 
     def __init__(self, mailbox: SimulatedMailbox) -> None:
         self.mailbox = mailbox
@@ -107,6 +109,7 @@ class ArchiveEmail(Tool):
 
     name: ClassVar[str] = "archive"
     action_ids: ClassVar[tuple[str, ...]] = ("email.archive", "email.move_to_archive")
+    proposal_params: ClassVar[str] = "required: none"
 
     def __init__(self, mailbox: SimulatedMailbox) -> None:
         self.mailbox = mailbox
@@ -126,6 +129,7 @@ class CreateDraft(Tool):
 
     name: ClassVar[str] = "create_draft"
     action_ids: ClassVar[tuple[str, ...]] = ("email.create_draft", "email.draft")
+    proposal_params: ClassVar[str] = 'required: {"body": the draft reply text}'
 
     def __init__(self, mailbox: SimulatedMailbox) -> None:
         self.mailbox = mailbox
@@ -154,6 +158,7 @@ class NotifyUser(Tool):
 
     name: ClassVar[str] = "notify"
     action_ids: ClassVar[tuple[str, ...]] = ("email.notify",)
+    proposal_params: ClassVar[str] = 'required: {"text": one line for the user}'
 
     def __init__(self, mailbox: SimulatedMailbox) -> None:
         self.mailbox = mailbox
@@ -182,6 +187,7 @@ class SendEmail(Tool):
 
     name: ClassVar[str] = "send_email"
     action_ids: ClassVar[tuple[str, ...]] = ("email.send", "email.send_email")
+    proposal_params: ClassVar[str] = 'required: {"to": [address], "body": the reply text}'
     leaves_the_mailbox: ClassVar[bool] = True
 
     def __init__(self, mailbox: SimulatedMailbox) -> None:
@@ -228,6 +234,23 @@ ACTION_TO_TOOL: Mapping[str, str] = {
     for action_id in tool_class.action_ids
 }
 
+# The one rule that turns an action id into the tool the floor judges. A proposal is
+# parsed through it, so a proposer supplies the dataset's vocabulary and the tool
+# follows - never the other way round, which would be a second vocabulary to police.
+# An id nothing holds comes back as itself, which leaves the floor's unrecognized-tool
+# rule in charge: it fails closed to a human instead of being quietly dropped.
+def tool_for_action(action_id: str) -> str:
+    """The tool an action id means, or the id itself when no tool holds it."""
+    return ACTION_TO_TOOL.get(action_id, action_id)
+
+
+def action_vocabulary() -> str:
+    """What a proposer may ask for, and what each action needs, as prompt lines."""
+    return "\n".join(
+        f"  {tool_class.action_ids[0]:24} {tool_class.proposal_params}"
+        for tool_class in TOOL_CLASSES
+    )
+
 
 def build_registry(mailbox: SimulatedMailbox | None = None) -> ToolRegistry:
     """Every simulated tool, over one mailbox."""
@@ -247,5 +270,7 @@ __all__ = [
     "ReadEmail",
     "SendEmail",
     "SimulatedMailbox",
+    "action_vocabulary",
     "build_registry",
+    "tool_for_action",
 ]

@@ -72,6 +72,15 @@ ALL_ROUTES: tuple[Route, ...] = (
     Route.ESCALATE,
 )
 
+
+def strictest(*routes: Route) -> Route:
+    """The least autonomous of these routes, which is the one that wins a disagreement.
+
+    Two sources can want different things about one arrival - a proposal and a persona's
+    own hard rules - and the answer is never the average of them.
+    """
+    return max(routes, key=ALL_ROUTES.index)
+
 # Highest-risk route each action class may reach, before vetoes narrow it further.
 _CLASS_ROUTE_CEILING: dict[ActionClass, tuple[Route, ...]] = {
     ActionClass.READ_ONLY: ALL_ROUTES,

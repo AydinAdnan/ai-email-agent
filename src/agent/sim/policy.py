@@ -30,14 +30,13 @@ from agent.safety.floor import (
     SafetyVerdict,
     floor_check,
 )
-from agent.tools.email_tools import ACTION_TO_TOOL
+from agent.tools.email_tools import tool_for_action
 from agent.triage import Triage, triage
 
 # The routes that stop the simulator and wait for the user.
 INTERRUPTING_ROUTES: frozenset[Route] = frozenset(
     {Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE}
 )
-
 
 
 @dataclass(frozen=True)
@@ -63,11 +62,6 @@ class Decision:
         return self.route in INTERRUPTING_ROUTES
 
 
-def tool_name_for(action_id: str) -> str:
-    """Map a dataset action id to the floor's tool name, failing closed."""
-    return ACTION_TO_TOOL.get(action_id, action_id)
-
-
 def email_context_for(case: Case) -> EmailContext:
     """Build the floor's view of a case from its canonical event."""
     message = case.event.message
@@ -86,7 +80,7 @@ def email_context_for(case: Case) -> EmailContext:
 def floor_verdict_for(case: Case) -> tuple[SafetyVerdict, str, str]:
     """Return the floor verdict, the dataset action id and the tool name it mapped to."""
     action_id = str(case.row["canonical_candidate_action"]["action_id"])
-    tool_name = tool_name_for(action_id)
+    tool_name = tool_for_action(action_id)
     params = dict(case.row["canonical_candidate_action"].get("arguments") or {})
     action = ActionPayload(tool_name=tool_name, params=_params_with_case(params, case))
     return floor_check(action, email=email_context_for(case)), action_id, tool_name
@@ -206,5 +200,4 @@ __all__ = [
     "email_context_for",
     "floor_verdict_for",
     "strictest_allowed",
-    "tool_name_for",
 ]

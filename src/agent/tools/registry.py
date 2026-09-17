@@ -146,10 +146,14 @@ class Tool(ABC):
     """One capability. Small on purpose: check refuses, apply acts."""
 
     name: ClassVar[str]
-    # The dataset's dotted action ids that mean this tool. The registry owns the
-    # mapping so a proposal, a reference label and a real adapter all speak one
-    # vocabulary.
+    # The dataset's dotted action ids that mean this tool, the first being the one a
+    # proposal is told about. The registry owns the mapping so a proposal, a reference
+    # label and a real adapter all speak one vocabulary.
     action_ids: ClassVar[tuple[str, ...]] = ()
+    # The arguments a proposer has to supply, as the prompt shows them. Message ids are
+    # filled in by the registry, so they are not the proposer's to guess. It lives here
+    # so what a model is told and what ``check`` enforces cannot drift apart.
+    proposal_params: ClassVar[str] = "required: none"
     # Notifications are local to the user's own assistant; a send leaves the mailbox.
     leaves_the_mailbox: ClassVar[bool] = False
 

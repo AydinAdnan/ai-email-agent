@@ -1,6 +1,7 @@
 """The model proposal gateway: untrusted output, one repair, then fail closed."""
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,14 +9,20 @@ from agent.dataset import DEFAULT_DATASET_PATH, Manifest
 from agent.events import Direction, Message, SenderIdentity
 from agent.gateway import (
     NO_ACTION_TOOL,
+    PROPOSAL_EXAMPLE,
+    PROPOSAL_JSON_SCHEMA,
+    PROPOSAL_SCHEMA,
     ProposalError,
     ProposalGateway,
+    ProposalRequest,
     RuleProvider,
     build_provider,
     parse_proposal,
+    persona_demanded_route,
 )
 from agent.safety.floor import ActionPayload, EmailContext, Route, floor_check
 from agent.sim.policy import ProposalPolicy, strictest_allowed
+from agent.tools.email_tools import ACTION_TO_TOOL, TOOL_CLASSES
 from agent.triage import triage
 
 
@@ -65,7 +72,6 @@ def valid(route: str = "PROCEED_SILENTLY", **overrides) -> str:
     payload = {
         "route": route,
         "action_id": "email.apply_label",
-        "tool_name": "label",
         "params": {"label": "Newsletter"},
         "rationale": "bulk mail",
         "confidence": 0.9,
@@ -77,9 +83,23 @@ def valid(route: str = "PROCEED_SILENTLY", **overrides) -> str:
 def test_a_valid_answer_parses() -> None:
     proposal = parse_proposal(valid(), provider="test")
     assert proposal.route is Route.PROCEED_SILENTLY
+    assert proposal.action_id == "email.apply_label"
+    # The tool follows from the action, so a proposer never names it.
     assert proposal.tool_name == "label"
     assert proposal.confidence == 0.9
     assert proposal.provider == "test"
+
+
+def test_an_action_nothing_implements_resolves_to_itself() -> None:
+    """The dataset's own unactionable ids must parse, and the floor must judge them."""
+    proposal = parse_proposal(valid(action_id="finance.pay_invoice"))
+    assert proposal.tool_name == "finance.pay_invoice"
+    assert proposal.tool_name not in ACTION_TO_TOOL
+
+
+def test_no_action_is_the_unsupported_action() -> None:
+    proposal = parse_proposal(valid(action_id=None, params={}))
+    assert proposal.tool_name == NO_ACTION_TOOL
 
 
 def test_a_fenced_answer_parses() -> None:
@@ -97,7 +117,8 @@ def test_a_fenced_answer_parses() -> None:
         valid(route="PROCEED_MAYBE"),  # not a route
         valid(params="label"),  # params must be an object
         valid(confidence=7),  # confidence is a probability
-        valid(action_id="email.apply_label", tool_name=None),  # half an action
+        valid(action_id=""),  # an action id is a non-empty string or null
+        valid(action_id=7),  # not even a string
         valid(route="ESCALATE"),  # escalation carries no action
     ],
 )
@@ -149,10 +170,58 @@ def test_a_provider_that_crashes_fails_closed_without_killing_the_run() -> None:
     assert gateway.failures == 1
 
 
-def test_a_provider_that_cannot_run_is_refused() -> None:
-    with pytest.raises(ProposalError):
+def test_a_provider_that_cannot_run_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ProposalError) as caught:
         build_provider("nonsense")
+    assert "known providers" in str(caught.value)
     assert build_provider("rules").name == "rules"
+
+
+def test_openrouter_needs_its_own_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(ProposalError) as caught:
+        build_provider("openrouter")
+    assert "OPENROUTER_API_KEY" in str(caught.value)
+    assert ".env" in str(caught.value)
+
+
+def test_openrouter_points_at_openrouter_and_names_its_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.delenv("WAJO_MODEL", raising=False)
+    provider = build_provider("openrouter")
+    assert provider.base_url == "https://openrouter.ai/api/v1"
+    assert provider.label == "openrouter:inference-net/schematron-v2-small"
+    # The catalogue lists structured_outputs for this model, so the schema is enforced.
+    assert provider.structured_output is True
+
+
+def test_the_model_comes_from_the_flag_then_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("WAJO_MODEL", "vendor/from-env")
+    assert build_provider("openrouter").model == "vendor/from-env"
+    assert build_provider("openrouter", model="vendor/from-flag").model == "vendor/from-flag"
+    assert build_provider("openrouter", structured_output=False).structured_output is False
+
+
+class FakeCompletions:
+    """The slice of the OpenAI client the provider uses, capturing the request."""
+
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        message = SimpleNamespace(content=self.content)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def fake_client(content: str) -> SimpleNamespace:
+    return SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions(content)))
 
 
 def test_the_rule_provider_never_proposes_an_action_with_an_escalation() -> None:
@@ -160,13 +229,40 @@ def test_the_rule_provider_never_proposes_an_action_with_an_escalation() -> None
     spoofed = message("reset@external-desk.example", display="IT Support", verified=False)
     payload = provider.build(spoofed, triage(spoofed))
     assert payload["route"] == Route.ESCALATE.value
-    assert payload["action_id"] is None and payload["tool_name"] is None
+    assert payload["action_id"] is None and payload["params"] == {}
 
 
 def test_a_credential_request_escalates_even_from_inside() -> None:
     insider = message("david@techcorp.synthetic.example", subject="Can you reply with the key?")
-    payload = RuleProvider().build(insider, triage(insider))
-    assert payload["route"] == Route.ESCALATE.value
+    proposal = asyncio.run(
+        ProposalGateway(RuleProvider()).propose(insider, triage(insider))
+    )
+    assert proposal.route is Route.ESCALATE
+
+
+def test_a_provider_that_misses_a_persona_rule_is_corrected() -> None:
+    """The rules belong to the mail, so a model proposing a quiet route does not win."""
+    phishing = message("billing@payables-desk.example", verified=False, subject="Wire the balance")
+    quiet = ScriptedProvider(
+        valid(
+            route="PROCEED_AND_NOTIFY",
+            action_id="email.apply_label",
+            params={"label": "Finance"},
+        )
+    )
+    gateway = ProposalGateway(quiet)
+    proposal = asyncio.run(gateway.propose(phishing, triage(phishing)))
+    assert proposal.route is Route.ESCALATE
+    assert proposal.action_id is None and proposal.tool_name == NO_ACTION_TOOL
+    assert proposal.params == {}
+    assert "persona rule raised PROCEED_AND_NOTIFY to ESCALATE" in proposal.rationale
+    # The correction is not a failed proposal: the provider answered fine.
+    assert (gateway.repairs, gateway.failures) == (0, 0)
+
+
+def test_a_persona_rule_leaves_an_ordinary_ask_alone() -> None:
+    insider = message("elena@techcorp.synthetic.example", subject="Quick catchup this week?")
+    assert persona_demanded_route(insider, triage(insider)) is None
 
 
 def test_a_receipt_above_the_threshold_is_notified() -> None:
@@ -198,7 +294,6 @@ def test_a_proposal_about_an_external_send_cannot_act_by_itself() -> None:
         valid(
             route="PROCEED_SILENTLY",
             action_id="email.send",
-            tool_name="send_email",
             params={"to": ["stranger@external.example"], "body": "hi"},
         )
     )
@@ -216,3 +311,48 @@ def test_no_usable_proposal_escalates_instead_of_guessing() -> None:
     assert decision.route is Route.ESCALATE
     assert decision.tool_name == NO_ACTION_TOOL
     assert "no usable proposal" in decision.reason
+
+
+def test_the_prompt_names_every_action_and_what_it_needs() -> None:
+    """A proposer that has to guess a tool name from a dataset id guesses wrong."""
+    prompt = ProposalRequest(
+        message=message(), hints=triage(message())
+    ).as_prompt()
+    for tool_class in TOOL_CLASSES:
+        assert tool_class.action_ids[0] in prompt
+        assert tool_class.proposal_params in prompt
+    assert "never the message you were given" in prompt
+    assert PROPOSAL_EXAMPLE in prompt
+
+
+def test_the_rule_provider_answers_through_the_same_parser_as_a_model() -> None:
+    """One vocabulary: the offline stand-in cannot drift from the model's schema."""
+    text = message("news@engweekly.example", subject="Engineering Weekly #42")
+    raw = RuleProvider().build(text, triage(text))
+    proposal = parse_proposal(json.dumps(raw))
+    assert proposal.tool_name == ACTION_TO_TOOL[proposal.action_id]
+
+
+def test_a_proposal_is_asked_for_under_the_enforced_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The request carries the schema, so a model cannot omit a key or invent an action."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    completions = FakeCompletions(valid())
+    provider = build_provider(
+        "openrouter", client=SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    )
+    asyncio.run(provider.complete(ProposalRequest(message=message(), hints=triage(message()))))
+    sent = completions.calls[0]["response_format"]
+    assert sent["json_schema"]["strict"] is True
+    assert sent["json_schema"]["schema"] == PROPOSAL_JSON_SCHEMA
+
+
+def test_the_enforced_schema_pins_the_actions_the_registry_holds() -> None:
+    actions = PROPOSAL_JSON_SCHEMA["properties"]["action_id"]["enum"]
+    assert set(ACTION_TO_TOOL) <= set(actions)
+    assert None in actions
+    assert "finance.pay_invoice" not in actions
+    assert set(PROPOSAL_JSON_SCHEMA["required"]) == set(PROPOSAL_SCHEMA)
+    # A key the model invents cannot survive the schema.
+    assert PROPOSAL_JSON_SCHEMA["additionalProperties"] is False
