@@ -131,6 +131,24 @@ def test_a_provider_that_never_answers_times_out() -> None:
     assert gateway.failures == 1
 
 
+class BrokenProvider:
+    """A provider that fails the way a network client does."""
+
+    name = "broken"
+
+    async def complete(self, request) -> str:
+        raise ConnectionError("connection reset by peer")
+
+
+def test_a_provider_that_crashes_fails_closed_without_killing_the_run() -> None:
+    """A transport error is a failed proposal, not an exception out of the session."""
+    gateway = ProposalGateway(BrokenProvider())
+    with pytest.raises(ProposalError) as caught:
+        asyncio.run(gateway.propose(message(), triage(message())))
+    assert "broken failed: ConnectionError" in str(caught.value)
+    assert gateway.failures == 1
+
+
 def test_a_provider_that_cannot_run_is_refused() -> None:
     with pytest.raises(ProposalError):
         build_provider("nonsense")

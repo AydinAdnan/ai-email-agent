@@ -195,6 +195,46 @@ def test_dataset_digest_matches_the_file(manifest):
     assert manifest.dataset_digest == hashlib.sha256(DEFAULT_DATASET_PATH.read_bytes()).hexdigest()
 
 
+def test_a_broken_line_reports_its_number_and_file(tmp_path):
+    """A JSON error has to say which line, or a 140-line dataset is a guessing game."""
+    broken = tmp_path / "broken.jsonl"
+    good = DEFAULT_DATASET_PATH.read_text(encoding="utf-8").splitlines()[0]
+    broken.write_text(f"{good}\n{{not json}}\n", encoding="utf-8")
+    with pytest.raises(ManifestError) as caught:
+        Manifest.load(broken)
+    message = str(caught.value)
+    assert "broken.jsonl" in message and "line 2" in message
+
+
+def test_a_missing_fixture_is_reported_not_raised_raw(tmp_path):
+    with pytest.raises(ManifestError) as caught:
+        Manifest.load(tmp_path / "absent.jsonl")
+    assert "absent.jsonl" in str(caught.value)
+
+
+def test_a_row_missing_a_field_names_the_case(manifest):
+    """A bare KeyError says nothing about which of the cases is malformed."""
+    case_id = manifest.cases[0].case_id
+    row = dict(manifest.cases[0].row)
+    row.pop("incoming_email")
+    with pytest.raises(ManifestError) as caught:
+        Manifest.from_rows([row])
+    assert case_id in str(caught.value)
+    assert "incoming_email" in str(caught.value)
+
+
+def test_a_row_without_labels_still_loads_but_refuses_to_be_scored(manifest):
+    """Labels are not needed to arrive, only to grade, so the failure lands there."""
+    case_id = manifest.cases[0].case_id
+    row = dict(manifest.cases[0].row)
+    row.pop("gold")
+    loaded = Manifest.from_rows([row])
+    assert loaded.cases[0].event.message.message_id == manifest.cases[0].event.message.message_id
+    with pytest.raises(ManifestError) as caught:
+        _ = loaded.cases[0].labels
+    assert case_id in str(caught.value)
+
+
 def test_labels_live_on_the_case_and_not_on_the_event(manifest):
     """Ground truth has to be reachable by scoring and out of reach of a decision."""
     for case in manifest.cases:

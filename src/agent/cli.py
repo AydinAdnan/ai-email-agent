@@ -10,7 +10,13 @@ import sys
 from collections.abc import Sequence
 from typing import IO
 
-from agent.dataset import DEFAULT_DATASET_PATH, Lane, Manifest
+from agent.dataset import (
+    DEFAULT_DATASET_PATH,
+    Lane,
+    Manifest,
+    ManifestError,
+    SplitViolation,
+)
 from agent.gateway import ProposalError, ProposalGateway, build_provider
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
@@ -116,7 +122,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if (args.command, getattr(args, "sim_command", None)) == ("sim", "run"):
         try:
             return sim_run(args, out)
-        except ProposalError as error:
+        except KeyboardInterrupt:
+            out.write("\nstopped before the run finished\n")
+            return 130
+        except (ProposalError, ManifestError, SplitViolation, OSError) as error:
+            # Foreseeable operational failures get one readable line, not a traceback.
             out.write(f"cannot run: {error}\n")
             return 2
     return 2

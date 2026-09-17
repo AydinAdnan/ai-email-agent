@@ -168,7 +168,7 @@ def _ordered_roots(by_id: Mapping[str, Message], root_id: str | None) -> list[Me
     if root_id is None:
         return ordered
     if root_id not in by_id:
-        raise KeyError(root_id)
+        raise KeyError(f"root_id {root_id!r} is not one of the thread's {len(by_id)} message(s)")
 
     chosen = by_id[root_id]
     return [chosen, *(message for message in ordered if message.message_id != root_id)]

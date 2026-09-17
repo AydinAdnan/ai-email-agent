@@ -257,7 +257,20 @@ class ProposalGateway:
                 ) from second_error
 
     async def _ask(self, request: ProposalRequest) -> str:
-        return await asyncio.wait_for(self.provider.complete(request), self.timeout)
+        """Ask once. A provider that fails in any way is a failed proposal, not a crash.
+
+        A network error, an auth error or a bug in a custom provider used to escape as
+        itself, which meant one bad call killed the whole session instead of the one
+        case. It becomes a ``ProposalError`` here so the caller can fail closed.
+        """
+        try:
+            return await asyncio.wait_for(self.provider.complete(request), self.timeout)
+        except (ProposalError, TimeoutError):
+            raise
+        except Exception as error:
+            raise ProposalError(
+                f"{self.provider.name} failed: {type(error).__name__}: {error}"
+            ) from error
 
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$")

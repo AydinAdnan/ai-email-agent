@@ -100,14 +100,17 @@ class Case:
     @property
     def labels(self) -> CaseLabels:
         """The dataset's answer for this case, for scoring and debugging only."""
-        incoming = self.row["incoming_email"]
-        gold = self.row["gold"]
-        return CaseLabels(
-            intent=incoming["intent"],
-            relationship_class=incoming["relationship_class"],
-            action_id=gold["action_id"],
-            autonomy_outcome=gold["autonomy_outcome"],
-        )
+        try:
+            incoming = self.row["incoming_email"]
+            gold = self.row["gold"]
+            return CaseLabels(
+                intent=incoming["intent"],
+                relationship_class=incoming["relationship_class"],
+                action_id=gold["action_id"],
+                autonomy_outcome=gold["autonomy_outcome"],
+            )
+        except (KeyError, TypeError) as error:
+            raise ManifestError(f"case {self.case_id} has no {error} label") from error
 
 
 def _sender(raw: Mapping[str, Any]) -> SenderIdentity:
@@ -181,15 +184,26 @@ def event_from_row(row: Mapping[str, Any]) -> EmailEvent:
 
 
 def _case_from_row(row: Mapping[str, Any]) -> Case:
+    """Build one case, naming the case on anything the row gets wrong.
+
+    A bare ``KeyError: 'gold'`` from a malformed row says nothing about which of a
+    hundred and forty rows is malformed, which is the only thing a reader needs.
+    """
+    case_id = str(row.get("case_id", "<row without a case_id>"))
     split = row.get("split")
     if split not in SPLIT_TO_LANE:
-        raise ManifestError(f"case {row.get('case_id')} has unknown split {split!r}")
+        raise ManifestError(f"case {case_id} has unknown split {split!r}")
+    try:
+        sequence_index = row["sequence_index"]
+        event = event_from_row(row)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ManifestError(f"case {case_id}: {type(error).__name__}: {error}") from error
     return Case(
-        case_id=row["case_id"],
+        case_id=case_id,
         lane=SPLIT_TO_LANE[split],
         split=split,
-        sequence_index=row["sequence_index"],
-        event=event_from_row(row),
+        sequence_index=sequence_index,
+        event=event,
         row=row,
     )
 
@@ -232,12 +246,20 @@ class Manifest:
     def load(cls, path: Path | str = DEFAULT_DATASET_PATH) -> "Manifest":
         """Load the manifest from a JSONL dataset file."""
         dataset_path = Path(path)
-        payload = dataset_path.read_bytes()
-        rows = [
-            json.loads(line)
-            for line in payload.decode("utf-8").splitlines()
-            if line.strip()
-        ]
+        try:
+            payload = dataset_path.read_bytes()
+        except OSError as error:
+            raise ManifestError(f"cannot read dataset {dataset_path}: {error}") from error
+        rows: list[Mapping[str, Any]] = []
+        for number, line in enumerate(payload.decode("utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as error:
+                raise ManifestError(
+                    f"{dataset_path}: line {number} is not JSON: {error}"
+                ) from error
         return cls.from_rows(
             rows,
             source=str(dataset_path),
@@ -302,7 +324,7 @@ class LaneView:
             raise SplitViolation(
                 f"lane '{self._lane.value}' may not open case {case_id}; it belongs to another lane"
             )
-        raise KeyError(case_id)
+        raise KeyError(f"no case {case_id!r} in {self._manifest.source}")
 
     def can_write_learner_state(self) -> bool:
         """Whether this lane may update the learner."""

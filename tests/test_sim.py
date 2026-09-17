@@ -15,7 +15,13 @@ from agent.events import Direction, Message, SenderIdentity
 from agent.safety.floor import Route
 from agent.sim.policy import GoldPolicy
 from agent.sim.reply_tree import build_reply_tree
-from agent.sim.runner import DecisionSource, close_input, run_simulation, thread_tree_for
+from agent.sim.runner import (
+    DecisionSource,
+    SimError,
+    close_input,
+    run_simulation,
+    thread_tree_for,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stream_12.jsonl"
 INTERRUPTING = {Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE}
@@ -339,6 +345,40 @@ def test_buffered_input_is_recorded_as_corrections_not_answers(
     assert outcome.silent_ends == 7
     assert all(item.case_id == "unbound" for item in outcome.feedback)
     assert "correction recorded before any decision" in out.getvalue()
+
+
+class ExplodingPolicy:
+    """A decision source that fails, to check the failure names its case."""
+
+    source = "exploding"
+
+    async def decide(self, case):
+        raise RuntimeError("policy is broken")
+
+
+def test_a_failing_policy_names_the_case_it_stopped_on() -> None:
+    with pytest.raises(SimError) as caught:
+        asyncio.run(run_simulation(view(), seed=7, out=io.StringIO(), policy=ExplodingPolicy()))
+    assert view().cases[0].case_id in str(caught.value)
+    assert "policy is broken" in str(caught.value)
+
+
+def test_a_broken_input_stream_ends_the_run_instead_of_hanging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the read fails, the prompts must see end of input, not wait forever."""
+
+    class BrokenStdin:
+        def readline(self) -> str:
+            raise OSError("stdin is gone")
+
+    monkeypatch.setattr(sys, "stdin", BrokenStdin())
+    out = io.StringIO()
+    outcome = asyncio.run(run_simulation(view(), seed=7, out=out))
+    assert outcome.processed == 12
+    assert outcome.silent_ends == outcome.interrupts
+    assert "input failed" in out.getvalue()
+    assert "input_error=OSError: stdin is gone" in out.getvalue()
 
 
 def test_end_of_input_is_silence_not_approval() -> None:

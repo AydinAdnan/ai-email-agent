@@ -40,6 +40,11 @@ from agent.sim.reply_tree import ReplyTree, build_reply_tree
 
 DecisionSource = ProposalPolicy | GoldPolicy
 
+
+class SimError(RuntimeError):
+    """Raised when a run cannot continue, naming the case it stopped on."""
+
+
 InterruptHook = Callable[[int, Decision], Awaitable[None]]
 _INPUT_CLOSED = object()
 
@@ -101,6 +106,7 @@ class ChatRunner:
         self.outcome = SimOutcome()
         self.closed = False
         self.last_decision: Decision | None = None
+        self.input_error: str | None = None
 
     async def run(self) -> SimOutcome:
         """Walk every case in the lane, in sequence order."""
@@ -119,7 +125,13 @@ class ChatRunner:
         return self.outcome
 
     async def _decide(self, case: Case) -> Decision:
-        decision = await self.policy.decide(case)
+        try:
+            decision = await self.policy.decide(case)
+        except Exception as error:
+            # A traceback that does not name the case is a bug hunt, not a bug report.
+            raise SimError(
+                f"case {case.case_id} could not be decided: {type(error).__name__}: {error}"
+            ) from error
         self.stream.append(case.event)
         self.last_decision = decision
         counts = self.outcome.route_counts
@@ -173,6 +185,24 @@ class ChatRunner:
                 text=text,
             )
         )
+
+    async def pump(self, source: AsyncIterator[str]) -> None:
+        """Hand typed lines to the chat, and always close the queue when the read ends.
+
+        The close is in a ``finally`` on purpose: if the read fails and the sentinel
+        never arrives, the next prompt waits on a queue no producer will ever feed and
+        the session hangs with nothing on screen to say why.
+        """
+        try:
+            async for line in source:
+                await self.queue.put(line.rstrip("\n"))
+        # An input stream can fail any way it likes; the point is that the session ends
+        # loudly instead of waiting on a queue nothing will ever feed.
+        except Exception as error:  # noqa: BLE001
+            self.input_error = f"{type(error).__name__}: {error}"
+            self._emit(f"  input failed, carrying on as if input ended: {self.input_error}")
+        finally:
+            await close_input(self.queue)
 
     async def _next_line(self) -> str | None:
         if self.closed:
@@ -254,6 +284,8 @@ class ChatRunner:
             f"corrections={self.outcome.corrections} silent_ends={self.outcome.silent_ends}"
         )
         self._emit(f"    seed={self.seed} replay_digest={self.outcome.replay_digest[:24]}")
+        if self.input_error is not None:
+            self._emit(f"    input_error={self.input_error}")
 
 
 def _tree_stats(tree: ReplyTree) -> str:
@@ -303,13 +335,6 @@ async def close_input(queue: asyncio.Queue[Any]) -> None:
     await queue.put(_INPUT_CLOSED)
 
 
-async def _pump_lines(source: AsyncIterator[str], queue: asyncio.Queue[Any]) -> None:
-    """Hand every line the user types to the chat, then close the queue."""
-    async for line in source:
-        await queue.put(line.rstrip("\n"))
-    await close_input(queue)
-
-
 async def _stdin_lines() -> AsyncIterator[str]:
     """Read stdin without blocking the event loop."""
     while True:
@@ -345,7 +370,7 @@ async def run_simulation(
     )
     pump: asyncio.Task[None] | None = None
     if input_queue is None:
-        pump = asyncio.create_task(_pump_lines(_stdin_lines(), runner.queue))
+        pump = asyncio.create_task(runner.pump(_stdin_lines()))
     try:
         return await runner.run()
     finally:
@@ -357,6 +382,7 @@ __all__ = [
     "INTERRUPTING_ROUTES",
     "ChatRunner",
     "InterruptHook",
+    "SimError",
     "SimOutcome",
     "close_input",
     "run_simulation",
