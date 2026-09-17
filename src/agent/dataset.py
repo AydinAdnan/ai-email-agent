@@ -98,6 +98,11 @@ class Case:
     row: Mapping[str, Any]
 
     @property
+    def labelled(self) -> bool:
+        """Whether this case carries the dataset's answer at all."""
+        return "gold" in self.row and "incoming_email" in self.row
+
+    @property
     def labels(self) -> CaseLabels:
         """The dataset's answer for this case, for scoring and debugging only."""
         try:
@@ -110,7 +115,9 @@ class Case:
                 autonomy_outcome=gold["autonomy_outcome"],
             )
         except (KeyError, TypeError) as error:
-            raise ManifestError(f"case {self.case_id} has no {error} label") from error
+            raise ManifestError(
+                f"case {self.case_id} has no {error} label: this input carried mail only"
+            ) from error
 
 
 def _sender(raw: Mapping[str, Any]) -> SenderIdentity:
@@ -183,6 +190,65 @@ def event_from_row(row: Mapping[str, Any]) -> EmailEvent:
     )
 
 
+def _case_from_mail_row(row: Mapping[str, Any], index: int) -> Case:
+    """Turn one plain mail row into a case the simulator can walk.
+
+    Missing ids are synthesised deterministically, and the lane is calibration because
+    an interactive mailbox is where a user may teach from. A row that carries no
+    verification signal is treated as delivered mail rather than as a spoof attempt: a
+    mailbox that knows its own SPF/DMARC result should say so per row.
+    """
+    case_id = str(row.get("case_id") or f"mail-{index:04d}")
+    thread_id = str(row.get("thread_id") or f"th-{index:04d}")
+    sender = row.get("sender", row.get("from", ""))
+    if isinstance(sender, Mapping):
+        identity = SenderIdentity(
+            email=str(sender.get("email", "")),
+            display_name=str(sender.get("display_name", "")),
+            verified_identity=bool(sender.get("verified_identity", True)),
+        )
+    else:
+        identity = SenderIdentity(email=str(sender), verified_identity=True)
+    if not identity.email:
+        raise ManifestError(f"{case_id}: a mail row needs a sender address")
+
+    def addresses(key: str) -> tuple[str, ...]:
+        value = row.get(key) or ()
+        if isinstance(value, str):
+            value = [item.strip() for item in value.split(",") if item.strip()]
+        return tuple(str(item) for item in value)
+
+    message = Message(
+        message_id=str(row.get("message_id") or f"msg-{index:04d}"),
+        thread_id=thread_id,
+        sender=identity,
+        recipients=addresses("to"),
+        cc=addresses("cc"),
+        direction=Direction.INBOUND,
+        subject=str(row.get("subject", "")),
+        body=str(row.get("body", "")),
+        attachments=tuple(_attachment(item) for item in row.get("attachments") or ()),
+        sent_at=_sent_at(row),
+    )
+    event = EmailEvent(
+        case_id=case_id,
+        sequence_index=index,
+        message=message,
+        thread=Thread(
+            thread_id=thread_id,
+            parent_message_id=row.get("parent_message_id"),
+        ),
+    )
+    return Case(
+        case_id=case_id,
+        lane=SPLIT_TO_LANE["learning_stream"],
+        split="learning_stream",
+        sequence_index=index,
+        event=event,
+        row=row,
+    )
+
+
 def _case_from_row(row: Mapping[str, Any]) -> Case:
     """Build one case, naming the case on anything the row gets wrong.
 
@@ -243,8 +309,36 @@ class Manifest:
         return cls(cases=ordered, dataset_digest=dataset_digest, source=source)
 
     @classmethod
-    def load(cls, path: Path | str = DEFAULT_DATASET_PATH) -> "Manifest":
-        """Load the manifest from a JSONL dataset file."""
+    def from_mail_rows(
+        cls,
+        rows: Sequence[Mapping[str, Any]],
+        source: str = "<mail>",
+        dataset_digest: str | None = None,
+    ) -> "Manifest":
+        """Build a manifest from plain mail: sender, recipients, subject and body.
+
+        A stream of real mail has no window, no gold route and no labels, so this makes
+        the shape the simulator needs and leaves the labels absent - ``Case.labels``
+        then refuses, which is the point: a case nobody labelled cannot be scored.
+        Everything the pipeline decides about such mail has to come from the mail.
+        """
+        cases = tuple(
+            _case_from_mail_row(row, index) for index, row in enumerate(rows, start=1)
+        )
+        if not cases:
+            raise ManifestError(f"{source} holds no mail")
+        validate_stream(tuple(case.event for case in cases))
+        if dataset_digest is None:
+            dataset_digest = hashlib.sha256(
+                "\n".join(json.dumps(dict(case.row), sort_keys=True) for case in cases).encode()
+            ).hexdigest()
+        return cls(cases=cases, dataset_digest=dataset_digest, source=source)
+
+    @classmethod
+    def load(
+        cls, path: Path | str = DEFAULT_DATASET_PATH, *, mail_only: bool = False
+    ) -> "Manifest":
+        """Load the manifest from a JSONL dataset file, or from plain mail rows."""
         dataset_path = Path(path)
         try:
             payload = dataset_path.read_bytes()
@@ -260,7 +354,8 @@ class Manifest:
                 raise ManifestError(
                     f"{dataset_path}: line {number} is not JSON: {error}"
                 ) from error
-        return cls.from_rows(
+        build = cls.from_mail_rows if mail_only else cls.from_rows
+        return build(
             rows,
             source=str(dataset_path),
             dataset_digest=hashlib.sha256(payload).hexdigest(),

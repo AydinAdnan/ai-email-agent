@@ -135,6 +135,10 @@ _KNOWN_TOOLS = {
     "send_email",
     "forward",
     "forward_email",
+    # Telling the user about something. Local to the assistant, so it is reversible
+    # and never an outbound send; the PROCEED_AND_NOTIFY route commits one.
+    "notify",
+    "notify_user",
     # Drafts (reversible)
     "draft_reply",
     "draft_email",

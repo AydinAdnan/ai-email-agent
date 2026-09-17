@@ -43,6 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_DATASET_PATH),
         help="JSONL dataset or fixture to replay (default: the full dataset)",
     )
+    run.add_argument(
+        "--mail",
+        metavar="PATH",
+        help=(
+            "replay plain mail instead of a dataset: one JSON object per message with "
+            "sender, to, subject and body. Such rows carry no labels, so nothing is scored"
+        ),
+    )
     run.add_argument("--seed", type=int, default=7, help="seed for the deterministic clock")
     run.add_argument(
         "--show-labels",
@@ -94,8 +102,10 @@ def _policy(args: argparse.Namespace) -> DecisionSource:
 
 
 def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
-    """Replay a fixture through the chat loop and print the run summary."""
-    manifest = Manifest.load(args.fixture)
+    """Replay a fixture or a plain mail stream through the chat loop."""
+    manifest = (
+        Manifest.load(args.mail, mail_only=True) if args.mail else Manifest.load(args.fixture)
+    )
     view = manifest.view(Lane(args.lane))
     cases = view.cases
     out.write(

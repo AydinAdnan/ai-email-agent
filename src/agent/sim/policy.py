@@ -16,6 +16,7 @@ Both obey the same rule: the floor always wins. A masked route falls back to the
 least autonomous route that survives, and a case the floor fences escalates no matter
 what either source wanted.
 """
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +30,7 @@ from agent.safety.floor import (
     SafetyVerdict,
     floor_check,
 )
+from agent.tools.email_tools import ACTION_TO_TOOL
 from agent.triage import Triage, triage
 
 # The routes that stop the simulator and wait for the user.
@@ -36,20 +38,6 @@ INTERRUPTING_ROUTES: frozenset[Route] = frozenset(
     {Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE}
 )
 
-# The dataset names actions in dotted form (``email.apply_label``) while the floor's
-# tool registry uses short names. Commit 3.3's registry owns this mapping; it lives
-# here only because the interim policy is what needs it.
-ACTION_TO_TOOL: dict[str, str] = {
-    "email.read": "read_email",
-    "email.apply_label": "label",
-    "email.archive": "archive",
-    "email.create_draft": "create_draft",
-    "email.notify": "notify",
-    "email.forward": "forward",
-    "email.send": "send_email",
-    # Deliberately unmapped: these are not tools the agent may hold, so the floor's
-    # unrecognized-tool rule catches them even if a case asks for them.
-}
 
 
 @dataclass(frozen=True)
@@ -60,6 +48,7 @@ class Decision:
     route: Route
     action_id: str
     tool_name: str
+    params: Mapping[str, Any]
     # The address the decision is about, so a correction saying "this sender" has
     # something to bind to.
     sender: str
@@ -167,6 +156,7 @@ class ProposalPolicy:
             route=route,
             action_id=proposal.action_id if (proposal and proposal.action_id) else NO_ACTION_TOOL,
             tool_name=tool_name or NO_ACTION_TOOL,
+            params=dict(proposal.params) if proposal is not None else {},
             sender=case.event.message.sender.email,
             reason=reason,
             verdict=verdict,
@@ -200,6 +190,7 @@ class GoldPolicy:
             route=route,
             action_id=action_id,
             tool_name=tool_name,
+            params=dict(case.row["canonical_candidate_action"].get("arguments") or {}),
             sender=case.event.message.sender.email,
             reason=reason,
             verdict=verdict,
@@ -208,7 +199,6 @@ class GoldPolicy:
 
 
 __all__ = [
-    "ACTION_TO_TOOL",
     "INTERRUPTING_ROUTES",
     "Decision",
     "GoldPolicy",

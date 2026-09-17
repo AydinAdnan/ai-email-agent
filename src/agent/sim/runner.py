@@ -27,16 +27,25 @@ parser and its scope echo.
 import asyncio
 import sys
 import textwrap
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import IO, Any
 
 from agent.dataset import Case, LaneView
 from agent.events import FeedbackEvent, FeedbackKind, SenderIdentity
+from agent.gateway import NO_ACTION_TOOL
 from agent.replay import EventStream, SeededClock
 from agent.safety.floor import Route
 from agent.sim.policy import INTERRUPTING_ROUTES, Decision, GoldPolicy, ProposalPolicy
 from agent.sim.reply_tree import ReplyTree, build_reply_tree
+from agent.tools.email_tools import SimulatedMailbox, build_registry
+from agent.tools.registry import (
+    ApprovalRequired,
+    AuthorizationRefused,
+    PreparedAction,
+    Receipt,
+    ToolRegistry,
+)
 
 DecisionSource = ProposalPolicy | GoldPolicy
 
@@ -74,11 +83,25 @@ class SimOutcome:
     route_counts: dict[str, int] = field(default_factory=dict)
     feedback: list[FeedbackEvent] = field(default_factory=list)
     replay_digest: str = ""
+    receipts: list[Receipt] = field(default_factory=list)
+    # Prepared but not committed: an ASK route waits for an approval that only the
+    # feedback parser (Commit 3.6) can supply.
+    awaiting_approval: list[PreparedAction] = field(default_factory=list)
+    refusals: list[str] = field(default_factory=list)
 
     @property
     def learnable_feedback(self) -> tuple[FeedbackEvent, ...]:
         """Feedback a learner would accept, which is nothing until Commit 3.6."""
         return tuple(item for item in self.feedback if item.explicit_for_learning)
+
+    def effects(self, tool: str) -> int:
+        """How many times a tool actually ran, counted from the receipts."""
+        return sum(
+            1
+            for receipt in self.receipts
+            for effect in receipt.effects
+            if effect.tool == tool
+        )
 
 
 class ChatRunner:
@@ -94,6 +117,8 @@ class ChatRunner:
         input_queue: asyncio.Queue[Any] | None = None,
         on_interrupt: InterruptHook | None = None,
         show_labels: bool = False,
+        mailbox: SimulatedMailbox | None = None,
+        registry: ToolRegistry | None = None,
     ) -> None:
         self.view = view
         self.seed = seed
@@ -102,6 +127,8 @@ class ChatRunner:
         self.queue: asyncio.Queue[Any] = input_queue if input_queue is not None else asyncio.Queue()
         self.on_interrupt = on_interrupt
         self.show_labels = show_labels
+        self.mailbox = mailbox if mailbox is not None else SimulatedMailbox()
+        self.registry = registry if registry is not None else build_registry(self.mailbox)
         self.stream = EventStream(SeededClock(seed=seed))
         self.outcome = SimOutcome()
         self.closed = False
@@ -115,7 +142,8 @@ class ChatRunner:
             await self._absorb_corrections()
             decision = await self._decide(case)
             tree = thread_tree_for(case)
-            self._emit(self._arrival_block(index, len(cases), case, decision, tree))
+            outcome_line = self._act(decision)
+            self._emit(self._arrival_block(index, len(cases), case, decision, tree, outcome_line))
             if decision.interrupts:
                 await self._handle_interrupt(index, decision, tree)
 
@@ -137,6 +165,39 @@ class ChatRunner:
         counts = self.outcome.route_counts
         counts[decision.route.value] = counts.get(decision.route.value, 0) + 1
         return decision
+
+    def _act(self, decision: Decision) -> str:
+        """Prepare the decision's steps, authorize them, and commit what may run.
+
+        Preparing validates without touching anything, so an action that will never be
+        authorized - every ASK, every escalation - leaves the mailbox exactly as it was.
+        """
+        case = self.view.open(decision.case_id)
+        prepared = self.registry.prepare(
+            case_id=decision.case_id,
+            message_id=case.event.message.message_id,
+            route=decision.route,
+            action_id=decision.action_id,
+            tool_name=None if decision.tool_name == NO_ACTION_TOOL else decision.tool_name,
+            params=decision.params,
+        )
+        try:
+            authorization = self.registry.authorize(
+                prepared, verdict_routes=decision.verdict.allowed_routes
+            )
+        except ApprovalRequired as waiting:
+            # An approval that only the feedback parser (Commit 3.6) can give.
+            self.outcome.awaiting_approval.append(prepared)
+            self.outcome.refusals.append(f"{decision.case_id}: {waiting}")
+            return f"prepared {prepared.summary()} [{waiting.code}: {_REFUSAL_WORDS[waiting.code]}]"
+        except AuthorizationRefused as refusal:
+            # Escalation: a human decides, so there is nothing to wait for here.
+            self.outcome.refusals.append(f"{decision.case_id}: {refusal}")
+            return f"nothing prepared [{refusal.code}: {_REFUSAL_WORDS[refusal.code]}]"
+
+        receipt = self.registry.commit(prepared, authorization, at=self.stream.clock.now())
+        self.outcome.receipts.append(receipt)
+        return f"{receipt.receipt_id} {receipt.summary()}"
 
     async def _handle_interrupt(self, index: int, decision: Decision, tree: ReplyTree) -> None:
         self.outcome.interrupts += 1
@@ -232,7 +293,13 @@ class ChatRunner:
         self.out.flush()
 
     def _arrival_block(
-        self, index: int, total: int, case: Case, decision: Decision, tree: ReplyTree
+        self,
+        index: int,
+        total: int,
+        case: Case,
+        decision: Decision,
+        tree: ReplyTree,
+        outcome_line: str = "",
     ) -> str:
         """The arriving mail the way an inbox shows it.
 
@@ -242,21 +309,27 @@ class ChatRunner:
         steer whoever is calibrating, so they are behind ``show_labels``.
         """
         message = case.event.message
-        labels = case.labels
         lines = [f"[{index:2}/{total}] {case.case_id}"]
         if self.show_labels:
             hints = decision.hints
-            lines.append(
-                f"    labels:   dataset_route={labels.autonomy_outcome} "
-                f"dataset_intent={labels.intent!r} "
-                f"relationship={labels.relationship_class!r} dataset_action={labels.action_id}"
-            )
+            if case.labelled:
+                labels = case.labels
+                lines.append(
+                    f"    labels:   dataset_route={labels.autonomy_outcome} "
+                    f"dataset_intent={labels.intent!r} "
+                    f"relationship={labels.relationship_class!r} dataset_action={labels.action_id}"
+                )
+            else:
+                lines.append("    labels:   none (this input is mail only)")
             pipeline = f"    pipeline: route={decision.route.value} source={decision.source}"
             if hints is not None:
                 pipeline += f" intent={hints.intent!r} relationship={hints.relationship_class!r}"
             lines.append(pipeline)
+            agreed = (
+                "yes" if case.labelled and decision.route.value == case.labels.autonomy_outcome else "no"
+            )
             lines.append(
-                f"    score:    agree={'yes' if decision.route.value == labels.autonomy_outcome else 'no'} "
+                f"    score:    agree={agreed if case.labelled else 'n/a'} "
                 f"floor={decision.verdict.rule_id or '-'} action={decision.action_id} "
                 f"{_tree_stats(tree)}"
             )
@@ -272,6 +345,8 @@ class ChatRunner:
         lines.extend(_prior_lines(tree, message.message_id))
         lines.append("")
         lines.extend(_body_lines(message.body))
+        if outcome_line:
+            lines.append(f"  Acted:   {outcome_line}")
         return "\n".join(lines)
 
     def _summarise(self) -> None:
@@ -283,9 +358,28 @@ class ChatRunner:
             f"    interrupts={self.outcome.interrupts} replies={self.outcome.replies} "
             f"corrections={self.outcome.corrections} silent_ends={self.outcome.silent_ends}"
         )
+        self._emit(
+            f"    receipts={len(self.outcome.receipts)} "
+            f"awaiting_approval={len(self.outcome.awaiting_approval)} "
+            f"refusals={len(self.outcome.refusals)} sends={self.outcome.effects('send_email')}"
+        )
+        self._emit(
+            f"    labels={self.outcome.effects('label')} archives={self.outcome.effects('archive')} "
+            f"drafts={self.outcome.effects('create_draft')} "
+            f"notifications={self.outcome.effects('notify')}"
+        )
         self._emit(f"    seed={self.seed} replay_digest={self.outcome.replay_digest[:24]}")
         if self.input_error is not None:
             self._emit(f"    input_error={self.input_error}")
+
+
+# The default view says what will happen in words, never in the route vocabulary: a
+# route name on screen is the answer key leaking back in through the transcript.
+_REFUSAL_WORDS: Mapping[str, str] = {
+    "APPROVAL_REQUIRED": "waiting for your approval; nothing was changed",
+    "AUTHORIZATION_REFUSED": "a human decides this one; nothing was changed",
+    "APPROVAL_STALE": "the approval no longer matches the work",
+}
 
 
 def _tree_stats(tree: ReplyTree) -> str:
@@ -353,6 +447,7 @@ async def run_simulation(
     on_interrupt: InterruptHook | None = None,
     policy: DecisionSource | None = None,
     show_labels: bool = False,
+    mailbox: SimulatedMailbox | None = None,
 ) -> SimOutcome:
     """Replay a lane through the chat loop, blocking only where the plan says to.
 
@@ -367,6 +462,7 @@ async def run_simulation(
         input_queue=input_queue,
         on_interrupt=on_interrupt,
         show_labels=show_labels,
+        mailbox=mailbox,
     )
     pump: asyncio.Task[None] | None = None
     if input_queue is None:
