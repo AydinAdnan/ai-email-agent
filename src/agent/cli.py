@@ -23,6 +23,7 @@ from agent.dataset import (
 from agent.gateway import ENDPOINTS, ProposalError, ProposalGateway, build_provider
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
+from agent.trace import TraceError, TraceSink
 
 # The lanes a human may sit in front of. Held-out cases are sealed: reading them
 # here would spend the only unbiased measurement Phase 8 has.
@@ -88,6 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="model id to use; falls back to WAJO_MODEL, then the endpoint's default",
     )
     run.add_argument(
+        "--trace",
+        metavar="PATH",
+        help=(
+            "append a JSONL trace of every decision to PATH: ids, hashes and bounded "
+            "records, with mail text and secrets replaced by digests"
+        ),
+    )
+    run.add_argument(
         "--lane",
         choices=[lane.value for lane in SIM_LANES],
         default=Lane.CALIBRATION.value,
@@ -132,11 +141,24 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
         "corrections, bound to the decision they followed\n"
         f"{_view_note(args.show_labels)}\n\n"
     )
-    outcome = asyncio.run(
-        run_simulation(
-            view, seed=args.seed, out=out, policy=policy, show_labels=args.show_labels
+    sink = TraceSink(args.trace) if args.trace else None
+    try:
+        outcome = asyncio.run(
+            run_simulation(
+                view,
+                seed=args.seed,
+                out=out,
+                policy=policy,
+                show_labels=args.show_labels,
+                trace=sink,
+            )
         )
-    )
+    finally:
+        # A run that dies mid-lane still leaves the lines it wrote.
+        if sink is not None:
+            sink.close()
+    if sink is not None:
+        out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
     return 0 if outcome.processed == len(cases) else 1
 
 
@@ -155,7 +177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except KeyboardInterrupt:
             out.write("\nstopped before the run finished\n")
             return 130
-        except (ProposalError, ManifestError, SplitViolation, OSError) as error:
+        except (ProposalError, ManifestError, SplitViolation, TraceError, OSError) as error:
             # Foreseeable operational failures get one readable line, not a traceback.
             out.write(f"cannot run: {error}\n")
             return 2

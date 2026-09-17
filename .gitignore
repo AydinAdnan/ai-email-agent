@@ -23,4 +23,7 @@ wheels/
 .DS_Store
 Thumbs.db
 
+# Local run artifacts (wajo sim run --trace)
+traces/
+
 docs

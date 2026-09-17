@@ -1,6 +1,7 @@
 """Phase 3.4: the chat simulator, its CLI and bounded reply-tree reconstruction."""
 import asyncio
 import io
+import json
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -23,6 +24,7 @@ from agent.sim.runner import (
     thread_tree_for,
 )
 from agent.sim.schedule import release_order
+from agent.trace import TraceSink
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stream_12.jsonl"
 INTERRUPTING = {Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE}
@@ -73,6 +75,7 @@ async def run_typed(
     seed: int = 7,
     show_labels: bool = False,
     policy: DecisionSource | None = None,
+    trace: TraceSink | None = None,
 ):
     """Replay the fixture, typing ``typed`` at the given interrupt numbers.
 
@@ -105,6 +108,7 @@ async def run_typed(
         on_interrupt=hook,
         show_labels=show_labels,
         policy=policy,
+        trace=trace,
     )
     return outcome, out.getvalue()
 
@@ -577,3 +581,25 @@ def test_cli_requires_a_subcommand() -> None:
         main([])
     with pytest.raises(SystemExit):
         main(["sim"])
+
+
+def test_a_traced_run_writes_the_decision_and_never_the_mail(tmp_path: Path) -> None:
+    """On a real run: one line per arrival, and no mail text in any of them."""
+    path = tmp_path / "run.jsonl"
+    sink = TraceSink(path)
+    outcome, transcript = asyncio.run(run_typed({1: ("okay",)}, trace=sink))
+    sink.close()
+
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    decisions = [line for line in lines if line["event"] == "decision"]
+    assert len(decisions) == outcome.processed
+    assert [line["case_id"] for line in decisions] == arrivals(transcript)
+    # A decision is traceable without the mail: what it was, what it read, what it chose.
+    assert all(line["message_digest"].startswith("sha256:") for line in decisions)
+    assert all(line["floor"]["allowed_routes"] for line in decisions)
+    assert all(line["dataset_digest"] for line in decisions)
+
+    text = path.read_text(encoding="utf-8")
+    for case in view().cases:
+        assert case.event.message.body[:60] not in text
+        assert case.event.message.subject not in text

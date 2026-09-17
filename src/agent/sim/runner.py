@@ -33,7 +33,7 @@ parser and its scope echo.
 import asyncio
 import sys
 import textwrap
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import IO, Any
 
@@ -53,6 +53,14 @@ from agent.safety.floor import Route
 from agent.sim.policy import INTERRUPTING_ROUTES, Decision, GoldPolicy, ProposalPolicy
 from agent.sim.reply_tree import ReplyTree, build_reply_tree
 from agent.sim.schedule import WINDOW_SIZE, Window, schedule
+from agent.state import (
+    GraphState,
+    hint_fields,
+    message_digest,
+    prepared_fields,
+    receipt_fields,
+    verdict_fields,
+)
 from agent.tools.email_tools import SimulatedMailbox, build_registry
 from agent.tools.registry import (
     Approval,
@@ -62,6 +70,7 @@ from agent.tools.registry import (
     Receipt,
     ToolRegistry,
 )
+from agent.trace import TraceSink
 
 DecisionSource = ProposalPolicy | GoldPolicy
 
@@ -139,6 +148,7 @@ class ChatRunner:
         registry: ToolRegistry | None = None,
         ledger: ClaimLedger | None = None,
         window: int = WINDOW_SIZE,
+        trace: TraceSink | None = None,
     ) -> None:
         self.view = view
         self.seed = seed
@@ -162,6 +172,11 @@ class ChatRunner:
         # The prepared action an approval would release, and the rules the user confirmed.
         self.pending: PreparedAction | None = None
         self.ledger = ledger if ledger is not None else ClaimLedger()
+        # The last case's work, kept so the trace line can name what was prepared and
+        # what was committed without the arrival block having to thread it back up.
+        self.last_prepared: PreparedAction | None = None
+        self.last_receipt: Receipt | None = None
+        self.trace = trace
 
     async def run(self) -> SimOutcome:
         """Deliver every case in the lane, window by window, in the order the seed drew."""
@@ -178,8 +193,19 @@ class ChatRunner:
             self._emit(
                 self._arrival_block(index, len(deliveries), case, decision, tree, outcome_line)
             )
+            self._trace("decision", case, decision, delivered=index)
             if decision.interrupts:
+                feedback = len(self.outcome.feedback)
+                claims = len(self.outcome.claims)
                 await self._handle_interrupt(index, decision, tree)
+                self._trace(
+                    "reply",
+                    case,
+                    decision,
+                    delivered=index,
+                    feedback=self.outcome.feedback[feedback:],
+                    claims=self.outcome.claims[claims:],
+                )
 
         self.outcome.processed = len(deliveries)
         self.outcome.replay_digest = self.stream.digest()
@@ -210,6 +236,8 @@ class ChatRunner:
         """
         self.wait_code = ""
         self.pending = None
+        self.last_prepared = None
+        self.last_receipt = None
         case = self.view.open(decision.case_id)
         prepared = self.registry.prepare(
             case_id=decision.case_id,
@@ -219,6 +247,7 @@ class ChatRunner:
             tool_name=None if decision.tool_name == NO_ACTION_TOOL else decision.tool_name,
             params=decision.params,
         )
+        self.last_prepared = prepared
         try:
             authorization = self.registry.authorize(
                 prepared, verdict_routes=decision.verdict.allowed_routes
@@ -238,7 +267,50 @@ class ChatRunner:
 
         receipt = self.registry.commit(prepared, authorization, at=self.stream.clock.now())
         self.outcome.receipts.append(receipt)
+        self.last_receipt = receipt
         return f"{receipt.receipt_id} {receipt.summary()}"
+
+    def _trace(
+        self,
+        event: str,
+        case: Case,
+        decision: Decision,
+        *,
+        delivered: int,
+        feedback: Sequence[FeedbackEvent] = (),
+        claims: Sequence[FeedbackClaim] = (),
+    ) -> None:
+        """One line per decision, and one per reply: ids, hashes, bounded records."""
+        if self.trace is None:
+            return
+        message = case.event.message
+        state: GraphState = {
+            "case_id": case.case_id,
+            "message_id": message.message_id,
+            "thread_id": message.thread_id,
+            "lane": self.view.lane.value,
+            "sequence_index": delivered,
+            "message_digest": message_digest(message),
+            "dataset_digest": self.view.manifest.dataset_digest,
+            "replay_seed": self.seed,
+            "hints": hint_fields(decision.hints),
+            "proposal": {
+                "source": decision.source,
+                "route": decision.route.value,
+                "action_id": decision.action_id,
+                "reason": decision.reason,
+            },
+            "floor": verdict_fields(decision.verdict),
+            "route": decision.route.value,
+            "action_id": decision.action_id,
+            "prepared": prepared_fields(self.last_prepared),
+            "receipt": receipt_fields(self.last_receipt),
+            "interrupt": {"code": self.wait_code} if self.wait_code else {},
+            "feedback": [item.event_id for item in feedback],
+            "claims": [claim.claim_id for claim in claims],
+            "node": "sim",
+        }
+        self.trace.write(event, state, at=self.stream.clock.now())
 
     async def _handle_interrupt(self, index: int, decision: Decision, tree: ReplyTree) -> None:
         self.outcome.interrupts += 1
@@ -598,6 +670,7 @@ async def run_simulation(
     show_labels: bool = False,
     mailbox: SimulatedMailbox | None = None,
     window: int = WINDOW_SIZE,
+    trace: TraceSink | None = None,
 ) -> SimOutcome:
     """Replay a lane through the chat loop, blocking only where the plan says to.
 
@@ -614,6 +687,7 @@ async def run_simulation(
         show_labels=show_labels,
         mailbox=mailbox,
         window=window,
+        trace=trace,
     )
     pump: asyncio.Task[None] | None = None
     if input_queue is None:
