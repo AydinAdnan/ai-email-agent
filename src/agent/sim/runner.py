@@ -1,0 +1,364 @@
+"""Concurrent chat-style simulator loop (Phase 3.4).
+
+Two tasks run at once: an arrival task that walks the stream in sequence order, and
+a stdin task that keeps reading lines. The arrival task blocks only when a route
+needs the user (ASK_FIRST_WITH_PREDRAFT or ESCALATE); SILENT and NOTIFY never wait,
+even if the user has already queued something to say.
+
+Arrivals are printed the way an inbox presents mail - sender, recipients, subject,
+body, thread - and never with the dataset's labels, unless ``show_labels`` is on.
+Sender, subject and body are what a production agent gets; intent, relationship class
+and the gold route are what Phase 8 scores it against, and printing those in front of
+whoever is calibrating would let the answer key steer them.
+
+A line is interpreted by when it was typed:
+
+- while a decision is waiting for an answer, the next line is the answer;
+- lines already handed over when the next arrival is processed are free-text
+  corrections bound to the decision they followed, so "this/that sender" resolves to
+  that decision's sender. A pipe has no prompt to answer, so everything it buffers is
+  read this way rather than being pinned on whichever case is prompting when it drains.
+
+Unparsed input is recorded as ``FeedbackKind.NONE`` with
+``explicit_for_learning=False``: a line nobody has parsed yet, and silence at the end
+of input, must never reach the learner. Commit 3.6 replaces that with the constrained
+parser and its scope echo.
+"""
+import asyncio
+import sys
+import textwrap
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import IO, Any
+
+from agent.dataset import Case, LaneView
+from agent.events import FeedbackEvent, FeedbackKind, SenderIdentity
+from agent.replay import EventStream, SeededClock
+from agent.safety.floor import Route
+from agent.sim.policy import INTERRUPTING_ROUTES, Decision, GoldPolicy, ProposalPolicy
+from agent.sim.reply_tree import ReplyTree, build_reply_tree
+
+DecisionSource = ProposalPolicy | GoldPolicy
+
+InterruptHook = Callable[[int, Decision], Awaitable[None]]
+_INPUT_CLOSED = object()
+
+# How long to let the input task hand over lines already typed before deciding that
+# the user is waiting rather than mid-sentence. Long enough for a buffered line to
+# arrive, far too short for a human to answer a prompt that has not been shown yet.
+_INPUT_SETTLE_SECONDS = 0.01
+
+
+def thread_tree_for(case: Case) -> ReplyTree:
+    """Reconstruct one case's thread, bounded by the reply-tree caps."""
+    messages = (case.event.message, *case.event.thread.messages_before)
+    known = {message.message_id for message in messages}
+    parent_id = case.event.thread.parent_message_id
+    return build_reply_tree(messages, root_id=parent_id if parent_id in known else None)
+
+
+@dataclass
+class SimOutcome:
+    """What one simulator run did."""
+
+    processed: int = 0
+    interrupts: int = 0
+    replies: int = 0
+    corrections: int = 0
+    silent_ends: int = 0
+    route_counts: dict[str, int] = field(default_factory=dict)
+    feedback: list[FeedbackEvent] = field(default_factory=list)
+    replay_digest: str = ""
+
+    @property
+    def learnable_feedback(self) -> tuple[FeedbackEvent, ...]:
+        """Feedback a learner would accept, which is nothing until Commit 3.6."""
+        return tuple(item for item in self.feedback if item.explicit_for_learning)
+
+
+class ChatRunner:
+    """Drive a lane through the chat loop: arrivals on one task, input on another."""
+
+    def __init__(
+        self,
+        view: LaneView,
+        *,
+        seed: int = 7,
+        out: IO[str] | None = None,
+        policy: DecisionSource | None = None,
+        input_queue: asyncio.Queue[Any] | None = None,
+        on_interrupt: InterruptHook | None = None,
+        show_labels: bool = False,
+    ) -> None:
+        self.view = view
+        self.seed = seed
+        self.out = out if out is not None else sys.stdout
+        self.policy: DecisionSource = policy if policy is not None else ProposalPolicy()
+        self.queue: asyncio.Queue[Any] = input_queue if input_queue is not None else asyncio.Queue()
+        self.on_interrupt = on_interrupt
+        self.show_labels = show_labels
+        self.stream = EventStream(SeededClock(seed=seed))
+        self.outcome = SimOutcome()
+        self.closed = False
+        self.last_decision: Decision | None = None
+
+    async def run(self) -> SimOutcome:
+        """Walk every case in the lane, in sequence order."""
+        cases = self.view.cases
+        for index, case in enumerate(cases, start=1):
+            await self._absorb_corrections()
+            decision = await self._decide(case)
+            tree = thread_tree_for(case)
+            self._emit(self._arrival_block(index, len(cases), case, decision, tree))
+            if decision.interrupts:
+                await self._handle_interrupt(index, decision, tree)
+
+        self.outcome.processed = len(cases)
+        self.outcome.replay_digest = self.stream.digest()
+        self._summarise()
+        return self.outcome
+
+    async def _decide(self, case: Case) -> Decision:
+        decision = await self.policy.decide(case)
+        self.stream.append(case.event)
+        self.last_decision = decision
+        counts = self.outcome.route_counts
+        counts[decision.route.value] = counts.get(decision.route.value, 0) + 1
+        return decision
+
+    async def _handle_interrupt(self, index: int, decision: Decision, tree: ReplyTree) -> None:
+        self.outcome.interrupts += 1
+        self._emit("  [reply required]")
+        if self.on_interrupt is not None:
+            await self.on_interrupt(index, decision)
+
+        answer = await self._next_line()
+        if answer is None:
+            self.outcome.silent_ends += 1
+            self._emit("        no reply before end of input (silence is not approval)")
+            return
+
+        self.outcome.replies += 1
+        self._emit(f"        reply recorded for {decision.case_id}: {answer!r} (unparsed)")
+        self._record(answer, decision.case_id)
+
+    async def _absorb_corrections(self) -> None:
+        """Consume lines typed while the previous decision was live.
+
+        The settle first, because a line the user typed while the agent was busy is a
+        correction to the decision they just saw; without it the line would sit in
+        the buffer and be taken as the answer to the next prompt, a different case.
+        """
+        await asyncio.sleep(_INPUT_SETTLE_SECONDS)
+        for line in self._drain():
+            self.outcome.corrections += 1
+            target = self.last_decision
+            if target is None:
+                self._emit(f"        correction recorded before any decision: {line!r}")
+                self._record(line, None)
+                continue
+            self._emit(
+                f"        correction bound to {target.case_id} "
+                f"(sender {target.sender}): {line!r}"
+            )
+            self._record(line, target.case_id)
+
+    def _record(self, text: str, case_id: str | None) -> None:
+        self.outcome.feedback.append(
+            FeedbackEvent(
+                event_id=f"{case_id or 'unbound'}:input:{len(self.outcome.feedback) + 1}",
+                case_id=case_id or "unbound",
+                kind=FeedbackKind.NONE,
+                explicit_for_learning=False,
+                text=text,
+            )
+        )
+
+    async def _next_line(self) -> str | None:
+        if self.closed:
+            return None
+        item = await self.queue.get()
+        if item is _INPUT_CLOSED:
+            self.closed = True
+            return None
+        return item
+
+    def _drain(self) -> list[str]:
+        lines: list[str] = []
+        if self.closed:
+            return lines
+        while True:
+            try:
+                item = self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return lines
+            if item is _INPUT_CLOSED:
+                self.closed = True
+                return lines
+            lines.append(item)
+
+    def _emit(self, text: str) -> None:
+        self.out.write(text + "\n")
+        self.out.flush()
+
+    def _arrival_block(
+        self, index: int, total: int, case: Case, decision: Decision, tree: ReplyTree
+    ) -> str:
+        """The arriving mail the way an inbox shows it.
+
+        Sender, recipients, subject, body and the thread are what a production agent
+        gets; the dataset's labels - intent, relationship class, the gold route - are
+        what Phase 8 scores it against. Printing those here would let the answer key
+        steer whoever is calibrating, so they are behind ``show_labels``.
+        """
+        message = case.event.message
+        labels = case.labels
+        lines = [f"[{index:2}/{total}] {case.case_id}"]
+        if self.show_labels:
+            hints = decision.hints
+            lines.append(
+                f"    labels:   dataset_route={labels.autonomy_outcome} "
+                f"dataset_intent={labels.intent!r} "
+                f"relationship={labels.relationship_class!r} dataset_action={labels.action_id}"
+            )
+            pipeline = f"    pipeline: route={decision.route.value} source={decision.source}"
+            if hints is not None:
+                pipeline += f" intent={hints.intent!r} relationship={hints.relationship_class!r}"
+            lines.append(pipeline)
+            lines.append(
+                f"    score:    agree={'yes' if decision.route.value == labels.autonomy_outcome else 'no'} "
+                f"floor={decision.verdict.rule_id or '-'} action={decision.action_id} "
+                f"{_tree_stats(tree)}"
+            )
+        lines.append(f"  From:    {_address(message.sender)}")
+        lines.append(f"  To:      {', '.join(message.recipients) or '(none)'}")
+        if message.cc:
+            lines.append(f"  Cc:      {', '.join(message.cc)}")
+        lines.append(f"  Subject: {message.subject}")
+        lines.append(f"  Thread:  {_thread_context(tree)}")
+        for attachment in message.attachments:
+            size = f", {attachment.size_bytes} bytes" if attachment.size_bytes else ""
+            lines.append(f"  Attach:  {attachment.filename} ({attachment.content_type}{size})")
+        lines.extend(_prior_lines(tree, message.message_id))
+        lines.append("")
+        lines.extend(_body_lines(message.body))
+        return "\n".join(lines)
+
+    def _summarise(self) -> None:
+        self._emit("")
+        self._emit("run summary")
+        for route in Route:
+            self._emit(f"    {route.value:24} {self.outcome.route_counts.get(route.value, 0)}")
+        self._emit(
+            f"    interrupts={self.outcome.interrupts} replies={self.outcome.replies} "
+            f"corrections={self.outcome.corrections} silent_ends={self.outcome.silent_ends}"
+        )
+        self._emit(f"    seed={self.seed} replay_digest={self.outcome.replay_digest[:24]}")
+
+
+def _tree_stats(tree: ReplyTree) -> str:
+    """One compact field for the labelled view: reconstructed messages and depth."""
+    return f"thread={tree.node_count}n/{tree.max_depth_reached}d{'+' if tree.truncated else ''}"
+
+
+def _address(sender: SenderIdentity) -> str:
+    """The address a reader sees, with its unverified display name left visible."""
+    return f"{sender.display_name} <{sender.email}>" if sender.display_name else sender.email
+
+
+def _thread_context(tree: ReplyTree) -> str:
+    """What the bounded thread reconstruction found, next to the mail."""
+    context = f"{tree.root.thread_id} ({tree.node_count} message(s), depth {tree.max_depth_reached}"
+    if tree.truncated:
+        context += ", truncated"
+    if tree.orphan_ids:
+        context += f", {len(tree.orphan_ids)} with a missing parent"
+    return context + ")"
+
+
+def _prior_lines(tree: ReplyTree, arrival_id: str, width: int = 72) -> list[str]:
+    """The earlier messages in the thread, in the order the DFS reconstructed them."""
+    lines: list[str] = []
+    for message in tree.walk():
+        if message.message_id == arrival_id:
+            continue
+        text = " ".join((message.quoted_text or message.body or "").split())
+        snippet = text[:width] + ("..." if len(text) > width else "")
+        lines.append(f"  prior:  {message.sender.email}: {snippet or '(no text)'}")
+    return lines
+
+
+def _body_lines(body: str, width: int = 88, limit: int = 40) -> list[str]:
+    """Wrap the body for a terminal, without reflowing the line breaks it arrived with."""
+    lines: list[str] = []
+    for raw in body.splitlines():
+        lines.extend(f"    {piece}" if piece else "" for piece in textwrap.wrap(raw, width=width) or [""])
+    if len(lines) > limit:
+        return [*lines[:limit], f"    ... ({len(lines) - limit} more wrapped lines)"]
+    return lines
+
+
+async def close_input(queue: asyncio.Queue[Any]) -> None:
+    """Tell a scripted run that no further lines are coming (EOF)."""
+    await queue.put(_INPUT_CLOSED)
+
+
+async def _pump_lines(source: AsyncIterator[str], queue: asyncio.Queue[Any]) -> None:
+    """Hand every line the user types to the chat, then close the queue."""
+    async for line in source:
+        await queue.put(line.rstrip("\n"))
+    await close_input(queue)
+
+
+async def _stdin_lines() -> AsyncIterator[str]:
+    """Read stdin without blocking the event loop."""
+    while True:
+        line = await asyncio.to_thread(sys.stdin.readline)
+        if not line:
+            return
+        yield line
+
+
+async def run_simulation(
+    view: LaneView,
+    *,
+    seed: int = 7,
+    out: IO[str] | None = None,
+    input_queue: asyncio.Queue[Any] | None = None,
+    on_interrupt: InterruptHook | None = None,
+    policy: DecisionSource | None = None,
+    show_labels: bool = False,
+) -> SimOutcome:
+    """Replay a lane through the chat loop, blocking only where the plan says to.
+
+    Pass an ``input_queue`` to drive the run from code (tests) instead of stdin, then
+    ``await close_input(queue)`` when the scripted lines run out.
+    """
+    runner = ChatRunner(
+        view,
+        seed=seed,
+        out=out,
+        policy=policy,
+        input_queue=input_queue,
+        on_interrupt=on_interrupt,
+        show_labels=show_labels,
+    )
+    pump: asyncio.Task[None] | None = None
+    if input_queue is None:
+        pump = asyncio.create_task(_pump_lines(_stdin_lines(), runner.queue))
+    try:
+        return await runner.run()
+    finally:
+        if pump is not None:
+            pump.cancel()
+
+
+__all__ = [
+    "INTERRUPTING_ROUTES",
+    "ChatRunner",
+    "InterruptHook",
+    "SimOutcome",
+    "close_input",
+    "run_simulation",
+    "thread_tree_for",
+]
