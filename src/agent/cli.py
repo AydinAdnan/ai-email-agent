@@ -1,8 +1,9 @@
-"""Command-line entry point (Phase 3.4).
+"""Command-line entry point.
 
 ``wajo sim run`` replays a fixture as a chat: arrivals stream in on one task while
 stdin is read on another, and the run stops only where the safety floor says the
-user is needed. Everything else — printing, parsing flags — is stdlib.
+user is needed. ``wajo loop run`` calibrates that way and then walks the same lane
+with what the calibration kept.
 """
 import argparse
 import asyncio
@@ -13,6 +14,7 @@ from typing import IO
 
 from dotenv import load_dotenv
 
+from agent.autonomy.preferences import RememberedProvider
 from agent.dataset import (
     DEFAULT_DATASET_PATH,
     Lane,
@@ -20,10 +22,17 @@ from agent.dataset import (
     ManifestError,
     SplitViolation,
 )
-from agent.gateway import ENDPOINTS, ProposalError, ProposalGateway, build_provider
+from agent.gateway import (
+    ENDPOINTS,
+    ProposalError,
+    ProposalGateway,
+    ProposalProvider,
+    build_provider,
+)
 from agent.graph import GraphError, GraphSession
+from agent.loop import run_loop
 from agent.memory.claims import ClaimStore
-from agent.memory.consent import Capability, Grant
+from agent.memory.consent import Capability, Grant, session_grant
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
 from agent.trace import TraceError, TraceSink
@@ -68,6 +77,27 @@ def build_parser() -> argparse.ArgumentParser:
             "dataset's labels, which is the reference for scoring only"
         ),
     )
+    loop = commands.add_parser("loop", help="calibrate a lane, then walk it with what was learned")
+    loop_commands = loop.add_subparsers(dest="loop_command", required=True)
+    guided = loop_commands.add_parser(
+        "run",
+        help=(
+            "two passes over one lane: a calibration chat, then the graph over the same "
+            "mail with the rules that chat produced answering first"
+        ),
+    )
+    _replay_flags(guided)
+    guided.add_argument(
+        "--say",
+        action="append",
+        metavar="[CASE=]LINE[;LINE]",
+        help=(
+            "answer a decision that waits, either naming the case it answers or in the "
+            "order the decisions wait; a rule's confirmation is the entry's second line "
+            "('WAJO-0008=ignore mail from claire@... ; yes')"
+        ),
+    )
+
     graph = commands.add_parser("graph", help="the checkpointed decision graph")
     graph_commands = graph.add_subparsers(dest="graph_command", required=True)
     walk = graph_commands.add_parser(
@@ -145,6 +175,14 @@ def _replay_flags(target: argparse.ArgumentParser) -> None:
             "records, with mail text and secrets replaced by digests"
         ),
     )
+    target.add_argument(
+        "--store",
+        metavar="PATH",
+        help=(
+            "the rules you confirm, kept in PATH as JSONL: read at the start and written "
+            "at the end, so the next run answers from them instead of asking again"
+        ),
+    )
 
 
 def _view_note(show_labels: bool) -> str:
@@ -154,13 +192,55 @@ def _view_note(show_labels: bool) -> str:
     return "each arrival is shown as mail: sender, subject and body only"
 
 
-def _policy(args: argparse.Namespace) -> tuple[DecisionSource, str]:
+def _open_store(args: argparse.Namespace) -> ClaimStore:
+    """The run's memory: the rules already kept, and the file they live in."""
+    grant = (
+        Grant(capability=Capability.LEARN)
+        if getattr(args, "no_learn", False)
+        else session_grant(purpose="calibration session")
+    )
+    return ClaimStore(grant=grant, path=args.store)
+
+
+def _proposing(provider: ProposalProvider, store: ClaimStore) -> ProposalGateway:
+    """The pipeline's proposer: a rule already confirmed answers before the provider does."""
+    return ProposalGateway(RememberedProvider(store, provider))
+
+
+def _policy(
+    args: argparse.Namespace, store: ClaimStore
+) -> tuple[DecisionSource, str]:
     """Pick the decision source and name it. Labels are a reference mode, not the default."""
     if args.policy == "labels":
         return GoldPolicy(), "the dataset's labels (reference)"
     provider = build_provider(args.provider, model=args.model)
     label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
-    return ProposalPolicy(ProposalGateway(provider)), f"the {label} proposal"
+    return ProposalPolicy(_proposing(provider, store)), f"the {label} proposal"
+
+
+def _store_note(args: argparse.Namespace, store: ClaimStore, out: IO[str]) -> None:
+    """Say what a run starts with, so it is obvious whether earlier rules are in force."""
+    if not args.store:
+        return
+    if store.refusal:
+        out.write(f"rules in {args.store}: not read ({store.refusal})\n")
+        return
+    out.write(f"rules in {args.store}: {store.loaded} loaded\n")
+
+
+def _keep_rules(args: argparse.Namespace, store: ClaimStore, out: IO[str]) -> None:
+    """Write the rules to the run's file, and list what is now in force."""
+    if not args.store:
+        return
+    store.save()
+    if store.refusal:
+        out.write(f"rules in {args.store}: not written ({store.refusal})\n")
+        return
+    active = sum(1 for claim in store.claims if claim.active)
+    out.write(f"rules in {store.path}: {active} in force\n")
+    for claim in store.claims:
+        replaced = "" if claim.active else " (replaced)"
+        out.write(f"    {claim.claim_id}  {claim.describe()}{replaced}\n")
 
 
 def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
@@ -170,18 +250,21 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
     )
     view = manifest.view(Lane(args.lane))
     cases = view.cases
-    policy, source = _policy(args)
+    store = _open_store(args)
+    policy, source = _policy(args, store)
     out.write(
         f"fixture: {manifest.source}\n"
         f"lane: {view.lane.value}  cases: {len(cases)}  seed: {args.seed}\n"
         f"digest: {manifest.dataset_digest[:16]}\n"
         f"proposal source: {source}\n"
+    )
+    _store_note(args, store, out)
+    out.write(
         "type a line when a decision waits for you; lines already typed are "
         "corrections, bound to the decision they followed\n"
         f"{_view_note(args.show_labels)}\n\n"
     )
     sink = TraceSink(args.trace) if args.trace else None
-    store = ClaimStore(grant=Grant(capability=Capability.LEARN)) if args.no_learn else None
     try:
         outcome = asyncio.run(
             run_simulation(
@@ -198,9 +281,79 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
         # A run that dies mid-lane still leaves the lines it wrote.
         if sink is not None:
             sink.close()
+    _keep_rules(args, store, out)
     if sink is not None:
         out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
     return 0 if outcome.processed == len(cases) else 1
+
+
+def loop_run(args: argparse.Namespace, out: IO[str]) -> int:
+    """Calibrate on a lane and then walk it again with what that pass kept."""
+    manifest = (
+        Manifest.load(args.mail, mail_only=True) if args.mail else Manifest.load(args.fixture)
+    )
+    view = manifest.view(Lane(args.lane))
+    provider = build_provider(args.provider, model=args.model)
+    label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
+    store = _open_store(args)
+    out.write(
+        f"fixture: {manifest.source}\n"
+        f"lane: {view.lane.value}  cases: {len(view.cases)}  seed: {args.seed}\n"
+        f"digest: {manifest.dataset_digest[:16]}\n"
+        f"proposal source: the {label} proposal\n"
+    )
+    _store_note(args, store, out)
+    out.write(
+        "\n[pass 1] calibration: the mail arrives, and only a decision that waits asks "
+        "you for a line\n"
+    )
+    sink = TraceSink(args.trace) if args.trace else None
+    try:
+        report = asyncio.run(
+            run_loop(
+                view,
+                seed=args.seed,
+                out=out,
+                script=args.say or (),
+                provider=provider,
+                store=store,
+                trace=sink,
+            )
+        )
+    finally:
+        if sink is not None:
+            sink.close()
+
+    recalled = set(report.recalled)
+    out.write(
+        f"\n[pass 2] autonomous: the same lane and seed, with {len(report.claims)} kept "
+        "rule(s) answering before the provider\n"
+    )
+    for index, case_id in enumerate(report.autonomous.order, start=1):
+        message = view.open(case_id).event.message
+        committed = case_id in {item.case_id for item in report.autonomous.receipts}
+        ended = "committed" if committed else report.autonomous.interrupts.get(case_id, "")
+        mark = "  <- from a rule" if message.message_id in recalled else ""
+        out.write(
+            f"[{index:>3}/{len(report.autonomous.order)}] {case_id}  "
+            f"{report.autonomous.routes.get(case_id, ''):<24} {ended}{mark}\n"
+        )
+    out.write(
+        f"\nasked for a line: {report.asked_before} in pass 1, {report.asked_after} in pass 2"
+        f"  ({report.quietened} decided by a rule)\n"
+        f"receipts: {len(report.calibration.receipts)} in pass 1, "
+        f"{len(report.autonomous.receipts)} in pass 2\n"
+    )
+    if not report.claims:
+        out.write("no rule was confirmed, so pass 2 decides exactly as pass 1\n")
+    elif not args.store:
+        out.write("kept after this run:\n")
+        for claim in report.claims:
+            out.write(f"    {claim.claim_id}  {claim.describe()}\n")
+    _keep_rules(args, store, out)
+    if sink is not None:
+        out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
+    return 0 if report.autonomous.processed == len(view.cases) else 1
 
 
 def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
@@ -213,18 +366,21 @@ def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
     provider = build_provider(args.provider, model=args.model)
     label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
     mask = not args.no_mask
+    store = _open_store(args)
     out.write(
         f"fixture: {manifest.source}\n"
         f"lane: {view.lane.value}  cases: {len(cases)}  seed: {args.seed}\n"
         f"digest: {manifest.dataset_digest[:16]}\n"
         f"proposal source: the {label} proposal\n"
-        f"provider view: {'masked subject and body' if mask else 'the raw mail'}\n\n"
+        f"provider view: {'masked subject and body' if mask else 'the raw mail'}\n"
     )
+    _store_note(args, store, out)
+    out.write("\n")
     sink = TraceSink(args.trace) if args.trace else None
     session = GraphSession(
         view,
         seed=args.seed,
-        gateway=ProposalGateway(provider),
+        gateway=_proposing(provider, store),
         mask=mask,
         trace=sink,
     )
@@ -254,6 +410,7 @@ def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
         out.write(f"    {route:<24} {count}\n")
     if note:
         out.write(note)
+    _keep_rules(args, store, out)
     if sink is not None:
         out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
     return 0 if outcome.processed == len(cases) else 1
@@ -290,6 +447,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             out.write("\nstopped before the lane finished\n")
             return 130
         except (GraphError, ManifestError, SplitViolation, TraceError, OSError) as error:
+            # Foreseeable operational failures get one readable line, not a traceback.
+            out.write(f"cannot run: {error}\n")
+            return 2
+    if (args.command, getattr(args, "loop_command", None)) == ("loop", "run"):
+        try:
+            return loop_run(args, out)
+        except KeyboardInterrupt:
+            out.write("\nstopped before the second pass finished\n")
+            return 130
+        except (ProposalError, ManifestError, SplitViolation, TraceError, OSError) as error:
             # Foreseeable operational failures get one readable line, not a traceback.
             out.write(f"cannot run: {error}\n")
             return 2
