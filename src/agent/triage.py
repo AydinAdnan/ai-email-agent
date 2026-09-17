@@ -88,9 +88,9 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "newsletter",
-        r"unsubscribe|newsletter|\bissue #\d|digest #\d|\bdigest\b|weekly (roundup|digest|issue)"
-        r"|\b\d+% (off|discount)|discount|webinar|\bgrowth hacks?\b|last chance|release notes"
-        r"|\bpodcast\b|\bwebinar\b|exclusive (offer|discount)",
+        r"unsubscribe|newsletter|\bpromotions?\b|\bissue #\d|digest #\d|\bdigest\b"
+        r"|weekly (roundup|digest|issue)|\b\d+% (off|discount)|discount|webinar"
+        r"|\bgrowth hacks?\b|last chance|release notes|\bpodcast\b|exclusive (offer|discount)",
     ),
     (
         "unsubscribe/archive",
@@ -204,6 +204,18 @@ def triage(
     )
 
 
+def intents_matching(text: str) -> tuple[str, ...]:
+    """Which intents this text's words point at, most policy-relevant first.
+
+    Exposed for the feedback parser: a person saying "promotions" or "cron status" is
+    naming a class of mail, and the words that decide a class should be the ones the
+    classifier already reads rather than a second list kept in step by hand.
+    """
+    return tuple(
+        intent for intent, pattern in _INTENT_MARKERS if re.search(pattern, text, re.IGNORECASE)
+    )
+
+
 def _first_intent(text: str, signals: list[str]) -> str:
     for intent, pattern in _INTENT_MARKERS:
         if re.search(pattern, text, re.IGNORECASE):
@@ -300,6 +312,7 @@ __all__ = [
     "RELATIONSHIP_CLASSES",
     "Triage",
     "amount_in",
+    "intents_matching",
     "triage",
     "user_domain",
 ]

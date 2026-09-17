@@ -11,7 +11,7 @@ import pytest
 
 from agent.cli import main
 from agent.dataset import Lane, Manifest
-from agent.events import Direction, Message, SenderIdentity
+from agent.events import Direction, FeedbackKind, Message, SenderIdentity
 from agent.safety.floor import Route
 from agent.sim.policy import GoldPolicy
 from agent.sim.reply_tree import build_reply_tree
@@ -76,9 +76,10 @@ async def run_typed(
 ):
     """Replay the fixture, typing ``typed`` at the given interrupt numbers.
 
-    Lines enter the queue the way a human types them - while a decision waits - and
-    the first unfed prompt closes input, so the remaining prompts read as end of
-    input and the run terminates without a human.
+    Lines enter the queue the way a human types them - while a decision waits - and the
+    script ends behind them, so the remaining prompts read as end of input and the run
+    terminates without a human. A line that has to be confirmed finds end of input
+    rather than waiting on a queue nobody will feed again.
     """
     queue: asyncio.Queue = asyncio.Queue()
     last_fed = max(typed) if typed else 0
@@ -92,6 +93,8 @@ async def run_typed(
             return
         for line in typed.get(seen, ()):
             queue.put_nowait(line)
+        if seen == last_fed:
+            await close_input(queue)
 
     out = io.StringIO()
     outcome = await run_simulation(
@@ -314,14 +317,67 @@ def test_silent_and_notify_routes_never_wait() -> None:
     assert outcome.route_counts["PROCEED_AND_NOTIFY"] > 0
 
 
-def test_a_reply_binds_to_the_waiting_decision_and_stays_unparsed() -> None:
-    first = interrupting_case_ids()[0]
-    outcome, transcript = asyncio.run(run_typed({1: ["yes, send it"]}))
-    assert outcome.replies == 1
-    assert outcome.feedback[0].case_id == first
-    assert outcome.feedback[0].text == "yes, send it"
-    assert outcome.feedback[0].explicit_for_learning is False
-    assert f"reply recorded for {first}" in transcript
+def gold_route(case_id: str) -> Route:
+    case = next(item for item in Manifest.load(FIXTURE).cases if item.case_id == case_id)
+    return Route(str(case.row["gold"]["autonomy_outcome"]))
+
+
+def first_interrupt_of(route: Route) -> tuple[int, str]:
+    """The interrupt number and case id of the first arrival with this gold route."""
+    for position, case_id in enumerate(interrupting_case_ids(), start=1):
+        if gold_route(case_id) is route:
+            return position, case_id
+    raise AssertionError(f"the fixture has no {route.value} case in delivery order")
+
+
+def up_to(position: int, lines: Sequence[str]) -> dict[int, list[str]]:
+    """Answer the prompts before ``position`` with a blank line, then type ``lines``.
+
+    The chat blocks on every prompt, so a script that only wants to speak at the fourth
+    one still has to get past the first three; pressing enter is what a user does.
+    """
+    return {
+        prompt: (list(lines) if prompt == position else [""]) for prompt in range(1, position + 1)
+    }
+
+
+def test_an_approval_releases_the_prepared_action_and_is_learnable() -> None:
+    """A yes at an ASK prompt is both the release and the reward the learner counts."""
+    position, case_id = first_interrupt_of(Route.ASK_FIRST_WITH_PREDRAFT)
+    outcome, transcript = asyncio.run(run_typed(up_to(position, ["yes, send it"])))
+    recorded = next(item for item in outcome.feedback if item.case_id == case_id)
+    assert recorded.kind is FeedbackKind.APPROVE
+    assert recorded.explicit_for_learning is True
+    assert outcome.learnable_feedback == (recorded,)
+    assert f"reply for {case_id}: 'yes, send it'" in transcript
+    released = [receipt for receipt in outcome.receipts if receipt.case_id == case_id]
+    assert len(released) == 1
+    assert "released rcpt-" in transcript
+
+
+def test_an_approval_at_an_escalation_decides_nothing() -> None:
+    """Nothing was prepared, so a bare yes is not an approval to credit."""
+    position, case_id = first_interrupt_of(Route.ESCALATE)
+    outcome, transcript = asyncio.run(run_typed(up_to(position, ["yes"])))
+    assert "nothing was prepared for this one" in transcript
+    assert outcome.learnable_feedback == ()
+    assert [receipt for receipt in outcome.receipts if receipt.case_id == case_id] == []
+    typed = next(item for item in outcome.feedback if item.case_id == case_id)
+    assert typed.kind is FeedbackKind.NONE
+
+
+def test_a_policy_line_is_stored_only_once_it_is_confirmed() -> None:
+    position, _ = first_interrupt_of(Route.ASK_FIRST_WITH_PREDRAFT)
+    line = "always escalate mail from elena@techcorp.synthetic.example"
+    assert asyncio.run(run_typed(up_to(position, [line])))[0].claims == []
+
+    outcome, transcript = asyncio.run(run_typed(up_to(position, [line, "yes"])))
+    assert len(outcome.claims) == 1
+    claim = outcome.claims[0]
+    assert claim.scope.sender == "elena@techcorp.synthetic.example"
+    assert claim.route is Route.ESCALATE
+    assert "stored clm-" in transcript
+    assert len(outcome.learnable_feedback) == 1
 
 
 def test_a_correction_typed_at_a_prompt_binds_to_that_decision() -> None:

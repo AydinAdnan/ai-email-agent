@@ -38,8 +38,16 @@ from dataclasses import dataclass, field, replace
 from typing import IO, Any
 
 from agent.dataset import Case, LaneView
-from agent.events import FeedbackEvent, FeedbackKind, SenderIdentity
+from agent.events import FeedbackEvent, FeedbackKind, SenderIdentity, is_learnable
 from agent.gateway import NO_ACTION_TOOL
+from agent.learning.feedback import (
+    ClaimLedger,
+    FeedbackClaim,
+    FeedbackContext,
+    Reading,
+    confirm_claim,
+    read_feedback,
+)
 from agent.replay import EventStream, SeededClock
 from agent.safety.floor import Route
 from agent.sim.policy import INTERRUPTING_ROUTES, Decision, GoldPolicy, ProposalPolicy
@@ -47,6 +55,7 @@ from agent.sim.reply_tree import ReplyTree, build_reply_tree
 from agent.sim.schedule import WINDOW_SIZE, Window, schedule
 from agent.tools.email_tools import SimulatedMailbox, build_registry
 from agent.tools.registry import (
+    Approval,
     ApprovalRequired,
     AuthorizationRefused,
     PreparedAction,
@@ -91,10 +100,12 @@ class SimOutcome:
     feedback: list[FeedbackEvent] = field(default_factory=list)
     replay_digest: str = ""
     receipts: list[Receipt] = field(default_factory=list)
-    # Prepared but not committed: an ASK route waits for an approval that only the
-    # feedback parser (Commit 3.6) can supply.
+    # Prepared but not committed: an ASK route waits for an approval only the user can
+    # give, and a confirmed approval releases it through the digest-bound contract.
     awaiting_approval: list[PreparedAction] = field(default_factory=list)
     refusals: list[str] = field(default_factory=list)
+    # Rules the user confirmed during the run. Nothing reaches here unconfirmed.
+    claims: list[FeedbackClaim] = field(default_factory=list)
 
     @property
     def learnable_feedback(self) -> tuple[FeedbackEvent, ...]:
@@ -126,6 +137,7 @@ class ChatRunner:
         show_labels: bool = False,
         mailbox: SimulatedMailbox | None = None,
         registry: ToolRegistry | None = None,
+        ledger: ClaimLedger | None = None,
         window: int = WINDOW_SIZE,
     ) -> None:
         self.view = view
@@ -147,6 +159,9 @@ class ChatRunner:
         # Why the last decision is waiting, from the code the registry raised: an ASK is
         # work to release, an escalation is a call nobody but the user can make.
         self.wait_code = ""
+        # The prepared action an approval would release, and the rules the user confirmed.
+        self.pending: PreparedAction | None = None
+        self.ledger = ledger if ledger is not None else ClaimLedger()
 
     async def run(self) -> SimOutcome:
         """Deliver every case in the lane, window by window, in the order the seed drew."""
@@ -194,6 +209,7 @@ class ChatRunner:
         authorized - every ASK, every escalation - leaves the mailbox exactly as it was.
         """
         self.wait_code = ""
+        self.pending = None
         case = self.view.open(decision.case_id)
         prepared = self.registry.prepare(
             case_id=decision.case_id,
@@ -208,8 +224,9 @@ class ChatRunner:
                 prepared, verdict_routes=decision.verdict.allowed_routes
             )
         except ApprovalRequired as waiting:
-            # An approval that only the feedback parser (Commit 3.6) can give.
+            # An approval only the user can give, which the reply parser reads.
             self.wait_code = waiting.code
+            self.pending = prepared
             self.outcome.awaiting_approval.append(prepared)
             self.outcome.refusals.append(f"{decision.case_id}: {waiting}")
             return f"prepared {prepared.summary()} [{waiting.code}: {_REFUSAL_WORDS[waiting.code]}]"
@@ -236,8 +253,83 @@ class ChatRunner:
             return
 
         self.outcome.replies += 1
-        self._emit(f"        reply recorded for {decision.case_id}: {answer!r} (unparsed)")
-        self._record(answer, decision.case_id)
+        self._emit(f"        reply for {decision.case_id}: {answer!r}")
+        reading = read_feedback(
+            answer, context=self._feedback_context(decision), recorded_at=self.stream.clock.now()
+        )
+        self._emit(f"        {reading.echo}")
+        if reading.claim is not None:
+            await self._settle(reading, decision)
+            return
+        if reading.kind is FeedbackKind.APPROVE and self.wait_code == ApprovalRequired.code:
+            self._record(answer, decision.case_id, kind=reading.kind)
+            self._release(decision)
+            return
+        if reading.kind in {FeedbackKind.APPROVE, FeedbackKind.REJECT}:
+            # Nothing was prepared for this one, so a bare yes or no did not decide
+            # anything: saying it did would credit the wrong arm later.
+            self._emit(
+                "        nothing was prepared for this one, so that decided nothing"
+                " - say what to do instead, e.g. 'always escalate these'"
+            )
+            self._record(answer, decision.case_id)
+            return
+        self._record(answer, decision.case_id, kind=reading.kind)
+
+    async def _settle(self, reading: Reading, decision: Decision) -> None:
+        """Ask the one bounded question and store the rule only if it is confirmed."""
+        self._emit(f"        {reading.prompt}")
+        answer = await self._next_line()
+        if answer is None:
+            self._emit("        no answer before end of input; nothing was stored")
+            return
+        claim = confirm_claim(
+            reading.claim,
+            answer,
+            context=self._feedback_context(decision),
+            recorded_at=self.stream.clock.now(),
+        )
+        if claim is None:
+            self._emit("        not confirmed, so nothing was stored as a rule")
+            return
+        stored = self.ledger.store(claim)
+        self.outcome.claims.append(stored)
+        self._record(claim.quote, claim.source_case_id, kind=reading.kind)
+        self._emit(f"        stored {stored.claim_id}: {stored.describe()}")
+
+    def _release(self, decision: Decision) -> None:
+        """Commit the work the user just approved, bound to the prepared digest."""
+        prepared = self.pending
+        if prepared is None:
+            return
+        try:
+            authorization = self.registry.authorize(
+                prepared,
+                approval=Approval(prepared_digest=prepared.digest, approved_by="user"),
+                verdict_routes=decision.verdict.allowed_routes,
+            )
+        except AuthorizationRefused as refusal:
+            self.outcome.refusals.append(f"{decision.case_id}: {refusal}")
+            self._emit(f"        could not release it [{refusal.code}]")
+            return
+        receipt = self.registry.commit(prepared, authorization, at=self.stream.clock.now())
+        self.outcome.receipts.append(receipt)
+        if prepared in self.outcome.awaiting_approval:
+            self.outcome.awaiting_approval.remove(prepared)
+        self._emit(f"        released {receipt.receipt_id} {receipt.summary()}")
+
+    def _feedback_context(self, decision: Decision) -> FeedbackContext:
+        """What the reply parser may look at: the mail and the decision, never a label."""
+        hints = decision.hints
+        return FeedbackContext(
+            case_id=decision.case_id,
+            sender=decision.sender,
+            intent=hints.intent if hints is not None else "",
+            relationship_class=hints.relationship_class if hints is not None else "",
+            route=decision.route,
+            action_id=decision.action_id,
+            subject=self.view.open(decision.case_id).event.message.subject,
+        )
 
     async def _absorb_corrections(self) -> None:
         """Consume lines typed while the previous decision was live.
@@ -258,15 +350,38 @@ class ChatRunner:
                 f"        correction bound to {target.case_id} "
                 f"(sender {target.sender}): {line!r}"
             )
-            self._record(line, target.case_id)
+            self._read_correction(line, target)
 
-    def _record(self, text: str, case_id: str | None) -> None:
+    def _read_correction(self, line: str, target: Decision) -> None:
+        """Read a line typed while the agent was busy, and say what it read.
+
+        A buffered line is never an answer: it was typed before the prompt it would be
+        answering existed, so a plain yes or no is not an approval of this decision and
+        nothing is credited to it. A rule needs a confirmation at a prompt, and a
+        correction that names the mail stands on its own.
+        """
+        reading = read_feedback(
+            line, context=self._feedback_context(target), recorded_at=self.stream.clock.now()
+        )
+        self._emit(f"        {reading.echo}")
+        if reading.claim is not None:
+            self._emit("        it needs a confirmed prompt before it becomes a rule")
+            self._record(line, target.case_id)
+            return
+        if reading.kind in {FeedbackKind.APPROVE, FeedbackKind.REJECT}:
+            self._emit("        typed before the prompt, so it decided nothing")
+            self._record(line, target.case_id)
+            return
+        self._record(line, target.case_id, kind=reading.kind)
+
+    def _record(self, text: str, case_id: str | None, *, kind: FeedbackKind = FeedbackKind.NONE) -> None:
+        """Record one line. Only a kind the plan calls learnable reaches the learner."""
         self.outcome.feedback.append(
             FeedbackEvent(
                 event_id=f"{case_id or 'unbound'}:input:{len(self.outcome.feedback) + 1}",
                 case_id=case_id or "unbound",
-                kind=FeedbackKind.NONE,
-                explicit_for_learning=False,
+                kind=kind,
+                explicit_for_learning=is_learnable(kind),
                 text=text,
             )
         )
@@ -392,6 +507,7 @@ class ChatRunner:
             f"drafts={self.outcome.effects('create_draft')} "
             f"notifications={self.outcome.effects('notify')}"
         )
+        self._emit(f"    claims={len(self.outcome.claims)} learnable_feedback={len(self.outcome.learnable_feedback)}")
         self._emit(f"    seed={self.seed} replay_digest={self.outcome.replay_digest[:24]}")
         if self.input_error is not None:
             self._emit(f"    input_error={self.input_error}")
