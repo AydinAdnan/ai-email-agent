@@ -17,83 +17,20 @@ Nothing is inferred about the user: scope comes from what they said and which ma
 were looking at, never from who they appear to be, which is what keeps inferred sensitive
 attributes out of memory by construction rather than by a filter.
 
-The ledger below is deliberately the smallest thing that can hold a confirmed claim.
-Commit 4.1 puts the consent gate in front of it and 4.2 owns the full claim schema, so
-this is a placeholder with a named replacement rather than a store to grow into.
+What a reading is worth keeping is not decided here: a confirmed claim goes to
+``agent.memory``, which carries the schema it has to satisfy and the consent it needs
+before anything is kept at all.
 """
-import hashlib
-import json
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
-from datetime import datetime
-from enum import StrEnum
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 
 from agent.events import FeedbackKind, is_learnable
+from agent.memory.claims import Claim, ClaimScope, ClaimType, ScopeAnchor, claim_id_for
 from agent.safety.floor import Route
 from agent.tools.email_tools import ACTION_TO_TOOL
 from agent.triage import intents_matching
-
-# ---------------------------------------------------------------- schema
-
-
-class ClaimType(StrEnum):
-    """What kind of policy the user stated. Commit 4.2 extends this vocabulary."""
-
-    PREFERENCE = "preference"
-    BOUNDARY = "boundary"
-    CORRECTION = "correction"
-
-
-class ScopeAnchor(StrEnum):
-    """How the claim's scope was arrived at, which is what its confidence means."""
-
-    EXPLICIT = "explicit"
-    INTENT = "intent"
-    CONTEXT = "context"
-    GLOBAL = "global"
-    UNRESOLVED = "unresolved"
-
-
-@dataclass(frozen=True)
-class ClaimScope:
-    """Where a claim applies: the axes the learner's buckets are built from."""
-
-    sender: str | None = None
-    domain: str | None = None
-    intent: str | None = None
-
-    @property
-    def resolved(self) -> bool:
-        """Whether the claim names anything narrower than the whole mailbox."""
-        return bool(self.sender or self.domain or self.intent)
-
-    def as_key(self) -> tuple[str, ...]:
-        """A stable key for the claim's scope, for ids and later comparison."""
-        return (self.sender or "", self.domain or "", self.intent or "")
-
-
-@dataclass(frozen=True)
-class FeedbackClaim:
-    """A candidate policy claim. It exists as a candidate until the user confirms it."""
-
-    claim_id: str
-    type: ClaimType
-    quote: str
-    scope: ClaimScope
-    scope_anchor: ScopeAnchor
-    route: Route | None = None
-    action_id: str | None = None
-    params: Mapping[str, Any] = field(default_factory=dict)
-    source_case_id: str = ""
-    starts_after_case_id: str | None = None
-    recorded_at: datetime | None = None
-    confidence: float = 0.0
-
-    def describe(self) -> str:
-        """The claim in plain words: what to do, where it applies, from when."""
-        return f"{_action_words(self)} {_scope_words(self)}. {_start_words(self)}."
 
 
 @dataclass(frozen=True)
@@ -107,6 +44,9 @@ class FeedbackContext:
     route: Route
     action_id: str
     subject: str = ""
+    # The source a claim has to be able to name. A rule typed with no mail in front of
+    # the user has no source, and the schema will not keep it.
+    message_id: str = ""
 
     @property
     def domain(self) -> str:
@@ -120,7 +60,7 @@ class Reading:
 
     kind: FeedbackKind
     echo: str
-    claim: FeedbackClaim | None = None
+    claim: Claim | None = None
     prompt: str | None = None
 
     @property
@@ -132,33 +72,6 @@ class Reading:
     def stores(self) -> bool:
         """Whether this reading would put a claim in memory once confirmed."""
         return self.claim is not None
-
-
-class ClaimLedger:
-    """Holds confirmed claims, and nothing before confirmation.
-
-    Commit 4.1 puts the consent gate in front of this and 4.2 owns the schema; what it
-    has to do today is prove the plan's check, which is that an ambiguous reading leaves
-    ``stored_claims`` at zero.
-    """
-
-    def __init__(self) -> None:
-        self._claims: list[FeedbackClaim] = []
-
-    @property
-    def stored_claims(self) -> int:
-        """How many claims the user has confirmed."""
-        return len(self._claims)
-
-    @property
-    def claims(self) -> tuple[FeedbackClaim, ...]:
-        return tuple(self._claims)
-
-    def store(self, claim: FeedbackClaim) -> FeedbackClaim:
-        """Store a confirmed claim. The same claim twice is stored once."""
-        if all(stored.claim_id != claim.claim_id for stored in self._claims):
-            self._claims.append(claim)
-        return claim
 
 
 # ---------------------------------------------------------------- how the user talks
@@ -271,13 +184,15 @@ def read_feedback(
 
 
 def confirm_claim(
-    claim: FeedbackClaim,
+    claim: Claim | None,
     answer: str,
     *,
     context: FeedbackContext | None = None,
     recorded_at: datetime | None = None,
-) -> FeedbackClaim | None:
+) -> Claim | None:
     """Read the user's answer to the scope echo: the claim to store, or None for no."""
+    if claim is None:
+        return None
     reply = " ".join(answer.split())
     if not reply:
         return None
@@ -291,10 +206,6 @@ def confirm_claim(
             confidence=1.0,
             quote=f"{claim.quote} | {reply}",
         )
-    if claim.scope_anchor is ScopeAnchor.UNRESOLVED and not claim.scope.resolved:
-        # The question was which mail, so only an answer that names one answers it. A
-        # yes here would store a rule that applies to everything by accident.
-        return _narrowed(claim, reply, context)
     if _LOCAL_ANSWER.search(reply):
         return replace(claim, quote=f"{claim.quote} | {reply}")
     verdict = confirm_words(reply)
@@ -306,8 +217,8 @@ def confirm_claim(
 
 
 def _narrowed(
-    claim: FeedbackClaim, reply: str, context: FeedbackContext | None
-) -> FeedbackClaim | None:
+    claim: Claim, reply: str, context: FeedbackContext | None
+) -> Claim | None:
     """The claim with the scope the answer named, or None when it named none."""
     scope, anchor, confidence = _scope_for(reply, context)
     if not scope.resolved:
@@ -354,18 +265,26 @@ def _claim_reading(
             f"I cannot do that: {unheld} is not an action I hold, so nothing was stored."
         )
 
-    claim = FeedbackClaim(
-        claim_id=_claim_id(quote, route, action_id, params, scope),
-        type=ClaimType.CORRECTION if corrected else (ClaimType.BOUNDARY if kind_hint else ClaimType.PREFERENCE),
+    if context is None or not context.message_id:
+        # A rule has to be able to name the mail it came from, so a line typed with no
+        # decision in front of the user is heard and not kept.
+        return _nothing(f"Noted: {quote!r}. Nothing was stored: a rule needs the mail it came from.")
+
+    claim = Claim(
+        claim_id=claim_id_for(quote, route, action_id, params, scope),
+        type=ClaimType.CORRECTION
+        if corrected
+        else (ClaimType.BOUNDARY if kind_hint else ClaimType.PREFERENCE),
         quote=quote,
         scope=scope,
         scope_anchor=anchor,
         route=route,
         action_id=action_id,
         params=params,
-        source_case_id=context.case_id if context else "",
-        starts_after_case_id=context.case_id if context else None,
-        recorded_at=recorded_at,
+        source_case_id=context.case_id,
+        source_message_id=context.message_id,
+        starts_after_case_id=context.case_id,
+        recorded_at=recorded_at or datetime.now(UTC),
         confidence=confident if not unresolved else min(confident, 0.3),
     )
     kind = (
@@ -473,7 +392,7 @@ def _words(text: str) -> tuple[str, ...]:
     return tuple(word for word in _WORD.findall(text.lower()) if word not in _STOP)
 
 
-def _question(claim: FeedbackClaim, *, unresolved: bool) -> str:
+def _question(claim: Claim, *, unresolved: bool) -> str:
     """The one bounded question: about the slot that is missing, never about everything."""
     if unresolved:
         return (
@@ -490,74 +409,9 @@ def _question(claim: FeedbackClaim, *, unresolved: bool) -> str:
     return "Storing that as a rule - is it right? (yes / no)"
 
 
-def _action_words(claim: FeedbackClaim) -> str:
-    """The work in the user's own terms, from the pipeline's action vocabulary."""
-    if claim.route is Route.ESCALATE:
-        return "escalate"
-    if claim.route is Route.ASK_FIRST_WITH_PREDRAFT:
-        return "draft a reply to and ask you about"
-    label = claim.params.get("label")
-    if label:
-        return f"label as {label} and tell me about"
-    if claim.action_id == "email.archive" and claim.route is Route.PROCEED_SILENTLY:
-        return "silently archive"
-    if claim.action_id == "email.archive":
-        return "archive"
-    if claim.route is Route.PROCEED_SILENTLY:
-        return "stop telling me about"
-    if claim.route is Route.PROCEED_AND_NOTIFY:
-        return "tell me about"
-    return "handle"
-
-
-def _scope_words(claim: FeedbackClaim) -> str:
-    scope = claim.scope
-    if claim.scope_anchor is ScopeAnchor.GLOBAL:
-        return "every future arrival"
-    if scope.sender:
-        return f"future mail from {scope.sender}"
-    if scope.domain:
-        return f"future mail from anyone at {scope.domain}"
-    if scope.intent:
-        return f"future {scope.intent} mail"
-    return "future mail"
-
-
-def _start_words(claim: FeedbackClaim) -> str:
-    if claim.starts_after_case_id:
-        return f"This starts after {claim.starts_after_case_id}, with the next arrival"
-    return "This starts with the next arrival"
-
-
-def _claim_id(
-    quote: str,
-    route: Route | None,
-    action_id: str | None,
-    params: Mapping[str, Any],
-    scope: ClaimScope,
-) -> str:
-    """A stable id for the same claim said twice, so it is never stored twice."""
-    payload = json.dumps(
-        {
-            "quote": quote.lower(),
-            "route": route.value if route else None,
-            "action": action_id,
-            "params": dict(sorted(params.items())),
-            "scope": scope.as_key(),
-        },
-        sort_keys=True,
-    )
-    return f"clm-{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:12]}"
-
-
 __all__ = [
-    "ClaimLedger",
-    "ClaimScope",
-    "ClaimType",
-    "FeedbackClaim",
     "FeedbackContext",
     "Reading",
-    "ScopeAnchor",
     "confirm_claim",
     "confirm_words",
     "read_feedback",

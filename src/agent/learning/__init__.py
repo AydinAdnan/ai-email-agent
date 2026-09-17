@@ -1,26 +1,24 @@
-"""Learning from the user: the feedback parser and the claims it may store."""
 from agent.learning.feedback import (
-    ClaimLedger,
-    ClaimScope,
-    ClaimType,
-    FeedbackClaim,
     FeedbackContext,
     Reading,
-    ScopeAnchor,
     confirm_claim,
     confirm_words,
     read_feedback,
 )
+from agent.memory.claims import Claim, ClaimScope, ClaimType, ScopeAnchor
+from agent.memory.consent import Grant, LearningConsent, session_grant
 
 __all__ = [
-    "ClaimLedger",
+    "Claim",
     "ClaimScope",
     "ClaimType",
-    "FeedbackClaim",
     "FeedbackContext",
+    "Grant",
+    "LearningConsent",
     "Reading",
     "ScopeAnchor",
     "confirm_claim",
     "confirm_words",
     "read_feedback",
+    "session_grant",
 ]

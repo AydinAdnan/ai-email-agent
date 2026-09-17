@@ -41,13 +41,13 @@ from agent.dataset import Case, LaneView
 from agent.events import FeedbackEvent, FeedbackKind, SenderIdentity, is_learnable
 from agent.gateway import NO_ACTION_TOOL
 from agent.learning.feedback import (
-    ClaimLedger,
-    FeedbackClaim,
     FeedbackContext,
     Reading,
     confirm_claim,
     read_feedback,
 )
+from agent.memory.claims import Claim, ClaimStore
+from agent.memory.consent import ConsentRequired, session_grant
 from agent.replay import EventStream, SeededClock
 from agent.safety.floor import Route
 from agent.sim.policy import INTERRUPTING_ROUTES, Decision, GoldPolicy, ProposalPolicy
@@ -114,7 +114,7 @@ class SimOutcome:
     awaiting_approval: list[PreparedAction] = field(default_factory=list)
     refusals: list[str] = field(default_factory=list)
     # Rules the user confirmed during the run. Nothing reaches here unconfirmed.
-    claims: list[FeedbackClaim] = field(default_factory=list)
+    claims: list[Claim] = field(default_factory=list)
 
     @property
     def learnable_feedback(self) -> tuple[FeedbackEvent, ...]:
@@ -146,7 +146,7 @@ class ChatRunner:
         show_labels: bool = False,
         mailbox: SimulatedMailbox | None = None,
         registry: ToolRegistry | None = None,
-        ledger: ClaimLedger | None = None,
+        store: ClaimStore | None = None,
         window: int = WINDOW_SIZE,
         trace: TraceSink | None = None,
     ) -> None:
@@ -171,7 +171,14 @@ class ChatRunner:
         self.wait_code = ""
         # The prepared action an approval would release, and the rules the user confirmed.
         self.pending: PreparedAction | None = None
-        self.ledger = ledger if ledger is not None else ClaimLedger()
+        # A calibration session is a human present and answering, so it carries consent
+        # for the session's own purpose and nothing wider. A run without that consent
+        # hears the same lines and keeps none of them.
+        self.store = (
+            store
+            if store is not None
+            else ClaimStore(grant=session_grant(purpose="calibration session"))
+        )
         # The last case's work, kept so the trace line can name what was prepared and
         # what was committed without the arrival block having to thread it back up.
         self.last_prepared: PreparedAction | None = None
@@ -278,7 +285,7 @@ class ChatRunner:
         *,
         delivered: int,
         feedback: Sequence[FeedbackEvent] = (),
-        claims: Sequence[FeedbackClaim] = (),
+        claims: Sequence[Claim] = (),
     ) -> None:
         """One line per decision, and one per reply: ids, hashes, bounded records."""
         if self.trace is None:
@@ -364,7 +371,14 @@ class ChatRunner:
         if claim is None:
             self._emit("        not confirmed, so nothing was stored as a rule")
             return
-        stored = self.ledger.store(claim)
+        try:
+            stored = self.store.store(claim)
+        except ConsentRequired as refusal:
+            # Heard, understood, and not kept: a session without consent for learning
+            # still calibrates, it just remembers nothing.
+            self._emit(f"        not stored: {refusal}")
+            self._record(claim.quote, claim.source_case_id, kind=reading.kind)
+            return
         self.outcome.claims.append(stored)
         self._record(claim.quote, claim.source_case_id, kind=reading.kind)
         self._emit(f"        stored {stored.claim_id}: {stored.describe()}")
@@ -393,6 +407,7 @@ class ChatRunner:
     def _feedback_context(self, decision: Decision) -> FeedbackContext:
         """What the reply parser may look at: the mail and the decision, never a label."""
         hints = decision.hints
+        message = self.view.open(decision.case_id).event.message
         return FeedbackContext(
             case_id=decision.case_id,
             sender=decision.sender,
@@ -400,7 +415,8 @@ class ChatRunner:
             relationship_class=hints.relationship_class if hints is not None else "",
             route=decision.route,
             action_id=decision.action_id,
-            subject=self.view.open(decision.case_id).event.message.subject,
+            subject=message.subject,
+            message_id=message.message_id,
         )
 
     async def _absorb_corrections(self) -> None:
@@ -671,6 +687,7 @@ async def run_simulation(
     mailbox: SimulatedMailbox | None = None,
     window: int = WINDOW_SIZE,
     trace: TraceSink | None = None,
+    store: ClaimStore | None = None,
 ) -> SimOutcome:
     """Replay a lane through the chat loop, blocking only where the plan says to.
 
@@ -688,6 +705,7 @@ async def run_simulation(
         mailbox=mailbox,
         window=window,
         trace=trace,
+        store=store,
     )
     pump: asyncio.Task[None] | None = None
     if input_queue is None:

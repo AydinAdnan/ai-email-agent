@@ -22,6 +22,8 @@ from agent.dataset import (
 )
 from agent.gateway import ENDPOINTS, ProposalError, ProposalGateway, build_provider
 from agent.graph import GraphError, GraphSession
+from agent.memory.claims import ClaimStore
+from agent.memory.consent import Capability, Grant
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
 from agent.trace import TraceError, TraceSink
@@ -44,6 +46,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="replay a fixture as a chat, blocking only for ask-first and escalate",
     )
     _replay_flags(run)
+    run.add_argument(
+        "--no-learn",
+        action="store_true",
+        help=(
+            "calibrate without keeping anything: the session holds the learning "
+            "capability and no consent, so a confirmed rule is heard and not stored"
+        ),
+    )
     run.add_argument(
         "--show-labels",
         action="store_true",
@@ -171,6 +181,7 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
         f"{_view_note(args.show_labels)}\n\n"
     )
     sink = TraceSink(args.trace) if args.trace else None
+    store = ClaimStore(grant=Grant(capability=Capability.LEARN)) if args.no_learn else None
     try:
         outcome = asyncio.run(
             run_simulation(
@@ -180,6 +191,7 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
                 policy=policy,
                 show_labels=args.show_labels,
                 trace=sink,
+                store=store,
             )
         )
     finally:
