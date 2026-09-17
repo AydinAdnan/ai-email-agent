@@ -1,9 +1,15 @@
-"""Concurrent chat-style simulator loop (Phase 3.4).
+"""Concurrent chat-style simulator loop (Phase 3.4, arrivals scheduled by 3.5).
 
-Two tasks run at once: an arrival task that walks the stream in sequence order, and
-a stdin task that keeps reading lines. The arrival task blocks only when a route
-needs the user (ASK_FIRST_WITH_PREDRAFT or ESCALATE); SILENT and NOTIFY never wait,
-even if the user has already queued something to say.
+Two tasks run at once: an arrival task that walks the lane window by window, and a
+stdin task that keeps reading lines. The arrival task blocks only when a route needs the
+user (ASK_FIRST_WITH_PREDRAFT or ESCALATE); SILENT and NOTIFY never wait, even if the
+user has already queued something to say.
+
+Arrivals are ordered by :mod:`agent.sim.schedule`: the lane is cut into windows of ten
+and the order inside a window is drawn from the run's seed, so a session arrives the way
+an inbox does rather than in dataset order. Delivery order is the stream's order, so an
+arrival takes its delivered position as its ``sequence_index`` - the row keeps the
+dataset's own index, which is what a case's provenance means.
 
 Arrivals are printed the way an inbox presents mail - sender, recipients, subject,
 body, thread - and never with the dataset's labels, unless ``show_labels`` is on.
@@ -28,7 +34,7 @@ import asyncio
 import sys
 import textwrap
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import IO, Any
 
 from agent.dataset import Case, LaneView
@@ -38,6 +44,7 @@ from agent.replay import EventStream, SeededClock
 from agent.safety.floor import Route
 from agent.sim.policy import INTERRUPTING_ROUTES, Decision, GoldPolicy, ProposalPolicy
 from agent.sim.reply_tree import ReplyTree, build_reply_tree
+from agent.sim.schedule import WINDOW_SIZE, Window, schedule
 from agent.tools.email_tools import SimulatedMailbox, build_registry
 from agent.tools.registry import (
     ApprovalRequired,
@@ -119,9 +126,12 @@ class ChatRunner:
         show_labels: bool = False,
         mailbox: SimulatedMailbox | None = None,
         registry: ToolRegistry | None = None,
+        window: int = WINDOW_SIZE,
     ) -> None:
         self.view = view
         self.seed = seed
+        self.window = window
+        self.windows: tuple[Window, ...] = schedule(view.cases, window=window, seed=seed)
         self.out = out if out is not None else sys.stdout
         self.policy: DecisionSource = policy if policy is not None else ProposalPolicy()
         self.queue: asyncio.Queue[Any] = input_queue if input_queue is not None else asyncio.Queue()
@@ -139,23 +149,29 @@ class ChatRunner:
         self.wait_code = ""
 
     async def run(self) -> SimOutcome:
-        """Walk every case in the lane, in sequence order."""
-        cases = self.view.cases
-        for index, case in enumerate(cases, start=1):
+        """Deliver every case in the lane, window by window, in the order the seed drew."""
+        deliveries = tuple(case for item in self.windows for case in item.cases)
+        self._emit(
+            f"schedule: {len(deliveries)} cases in {len(self.windows)} window(s) of up to "
+            f"{self.window}, order drawn from seed {self.seed}"
+        )
+        for index, case in enumerate(deliveries, start=1):
             await self._absorb_corrections()
-            decision = await self._decide(case)
+            decision = await self._decide(case, delivered=index)
             tree = thread_tree_for(case)
             outcome_line = self._act(decision)
-            self._emit(self._arrival_block(index, len(cases), case, decision, tree, outcome_line))
+            self._emit(
+                self._arrival_block(index, len(deliveries), case, decision, tree, outcome_line)
+            )
             if decision.interrupts:
                 await self._handle_interrupt(index, decision, tree)
 
-        self.outcome.processed = len(cases)
+        self.outcome.processed = len(deliveries)
         self.outcome.replay_digest = self.stream.digest()
         self._summarise()
         return self.outcome
 
-    async def _decide(self, case: Case) -> Decision:
+    async def _decide(self, case: Case, *, delivered: int) -> Decision:
         try:
             decision = await self.policy.decide(case)
         except Exception as error:
@@ -163,7 +179,9 @@ class ChatRunner:
             raise SimError(
                 f"case {case.case_id} could not be decided: {type(error).__name__}: {error}"
             ) from error
-        self.stream.append(case.event)
+        # The stream's order is delivery order, and the windowed schedule is what decides
+        # it, so the arrival is recorded at the position it arrived.
+        self.stream.append(replace(case.event, sequence_index=delivered))
         self.last_decision = decision
         counts = self.outcome.route_counts
         counts[decision.route.value] = counts.get(decision.route.value, 0) + 1
@@ -463,6 +481,7 @@ async def run_simulation(
     policy: DecisionSource | None = None,
     show_labels: bool = False,
     mailbox: SimulatedMailbox | None = None,
+    window: int = WINDOW_SIZE,
 ) -> SimOutcome:
     """Replay a lane through the chat loop, blocking only where the plan says to.
 
@@ -478,6 +497,7 @@ async def run_simulation(
         on_interrupt=on_interrupt,
         show_labels=show_labels,
         mailbox=mailbox,
+        window=window,
     )
     pump: asyncio.Task[None] | None = None
     if input_queue is None:

@@ -22,6 +22,7 @@ from agent.sim.runner import (
     run_simulation,
     thread_tree_for,
 )
+from agent.sim.schedule import release_order
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stream_12.jsonl"
 INTERRUPTING = {Route.ASK_FIRST_WITH_PREDRAFT, Route.ESCALATE}
@@ -52,13 +53,18 @@ def view(lane: Lane = Lane.CALIBRATION):
     return Manifest.load(FIXTURE).view(lane)
 
 
-def interrupting_case_ids() -> list[str]:
-    """Fixture cases whose gold route asks the user, in sequence order."""
-    return [
-        case.case_id
+def scheduled_case_ids(seed: int = 7) -> list[str]:
+    """Fixture case ids in the order the windows deliver them."""
+    return [case.case_id for case in release_order(view().cases, seed=seed)]
+
+
+def interrupting_case_ids(seed: int = 7) -> list[str]:
+    """Fixture cases whose gold route asks the user, in delivery order."""
+    routes = {
+        case.case_id: Route(str(case.row["gold"]["autonomy_outcome"]))
         for case in Manifest.load(FIXTURE).cases
-        if Route(str(case.row["gold"]["autonomy_outcome"])) in INTERRUPTING
-    ]
+    }
+    return [case_id for case_id in scheduled_case_ids(seed) if routes[case_id] in INTERRUPTING]
 
 
 async def run_typed(
@@ -239,6 +245,14 @@ def test_every_case_in_the_fixture_is_processed() -> None:
     assert len(arrivals(transcript)) == 12
 
 
+def test_arrivals_come_in_the_windowed_order_the_seed_recorded() -> None:
+    """The lane is delivered window by window, not in the dataset's sequence order."""
+    _, transcript = asyncio.run(run_typed({}))
+    assert arrivals(transcript) == scheduled_case_ids()
+    assert arrivals(transcript) != [case.case_id for case in view().cases]
+    assert "order drawn from seed 7" in transcript
+
+
 def test_only_the_pipeline_routes_that_ask_wait_for_a_reply() -> None:
     outcome, transcript = asyncio.run(run_typed({}, show_labels=True))
     assert len(labelled_routes(transcript)) == 12
@@ -359,7 +373,7 @@ class ExplodingPolicy:
 def test_a_failing_policy_names_the_case_it_stopped_on() -> None:
     with pytest.raises(SimError) as caught:
         asyncio.run(run_simulation(view(), seed=7, out=io.StringIO(), policy=ExplodingPolicy()))
-    assert view().cases[0].case_id in str(caught.value)
+    assert scheduled_case_ids()[0] in str(caught.value)
     assert "policy is broken" in str(caught.value)
 
 
@@ -404,7 +418,8 @@ def test_same_seed_reproduces_the_log_and_a_new_seed_does_not() -> None:
 
 
 def test_an_arrival_shows_the_mail_a_production_inbox_shows() -> None:
-    case = Manifest.load(FIXTURE).cases[0]
+    first = scheduled_case_ids()[0]
+    case = next(item for item in Manifest.load(FIXTURE).cases if item.case_id == first)
     message = case.event.message
     _, transcript = asyncio.run(run_typed({}))
     block = block_of(transcript, case.case_id)

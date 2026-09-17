@@ -54,7 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
             "sender, to, subject and body. Such rows carry no labels, so nothing is scored"
         ),
     )
-    run.add_argument("--seed", type=int, default=7, help="seed for the deterministic clock")
+    run.add_argument(
+        "--seed",
+        type=int,
+        default=7,
+        help="seed for the deterministic clock and the order inside each arrival window",
+    )
     run.add_argument(
         "--show-labels",
         action="store_true",
