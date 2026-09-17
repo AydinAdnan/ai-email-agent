@@ -17,7 +17,11 @@ wheels/
 # tool cache
 .pytest_cache/
 .ruff_cache/
+.freebuff/
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Large reference PDFs (keep docs/*.md tracked)
+docs/
