@@ -32,6 +32,7 @@ class GraphState(TypedDict, total=False):
     hints: dict[str, Any]
     proposal: dict[str, Any]
     floor: dict[str, Any]
+    pii: dict[str, Any]
     route: str
     action_id: str
 

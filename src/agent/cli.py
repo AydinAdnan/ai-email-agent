@@ -21,6 +21,7 @@ from agent.dataset import (
     SplitViolation,
 )
 from agent.gateway import ENDPOINTS, ProposalError, ProposalGateway, build_provider
+from agent.graph import GraphError, run_graph
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
 from agent.trace import TraceError, TraceSink
@@ -42,25 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="replay a fixture as a chat, blocking only for ask-first and escalate",
     )
-    run.add_argument(
-        "--fixture",
-        default=str(DEFAULT_DATASET_PATH),
-        help="JSONL dataset or fixture to replay (default: the full dataset)",
-    )
-    run.add_argument(
-        "--mail",
-        metavar="PATH",
-        help=(
-            "replay plain mail instead of a dataset: one JSON object per message with "
-            "sender, to, subject and body. Such rows carry no labels, so nothing is scored"
-        ),
-    )
-    run.add_argument(
-        "--seed",
-        type=int,
-        default=7,
-        help="seed for the deterministic clock and the order inside each arrival window",
-    )
+    _replay_flags(run)
     run.add_argument(
         "--show-labels",
         action="store_true",
@@ -75,28 +58,46 @@ def build_parser() -> argparse.ArgumentParser:
             "dataset's labels, which is the reference for scoring only"
         ),
     )
-    run.add_argument(
-        "--provider",
-        choices=["rules", *ENDPOINTS],
-        default="rules",
+    graph = commands.add_parser("graph", help="the checkpointed decision graph")
+    graph_commands = graph.add_subparsers(dest="graph_command", required=True)
+    walk = graph_commands.add_parser(
+        "run",
+        help="walk a fixture through the graph, one checkpointed decision per arrival",
+    )
+    _replay_flags(walk)
+    walk.add_argument(
+        "--no-mask",
+        action="store_true",
         help=(
-            "who proposes: the offline rule stand-in, or a model endpoint "
-            "(its key goes in .env at the repository root)"
+            "hand the provider the raw mail; the default masks subject and body first, "
+            "which is what this switch exists to measure against"
         ),
     )
-    run.add_argument(
-        "--model",
-        help="model id to use; falls back to WAJO_MODEL, then the endpoint's default",
+    return parser
+
+
+def _replay_flags(target: argparse.ArgumentParser) -> None:
+    """The flags both replay paths take: which mail, which lane, who proposes, a trace."""
+    target.add_argument(
+        "--fixture",
+        default=str(DEFAULT_DATASET_PATH),
+        help="JSONL dataset or fixture to replay (default: the full dataset)",
     )
-    run.add_argument(
-        "--trace",
+    target.add_argument(
+        "--mail",
         metavar="PATH",
         help=(
-            "append a JSONL trace of every decision to PATH: ids, hashes and bounded "
-            "records, with mail text and secrets replaced by digests"
+            "replay plain mail instead of a dataset: one JSON object per message with "
+            "sender, to, subject and body. Such rows carry no labels, so nothing is scored"
         ),
     )
-    run.add_argument(
+    target.add_argument(
+        "--seed",
+        type=int,
+        default=7,
+        help="seed for the deterministic clock and the order inside each arrival window",
+    )
+    target.add_argument(
         "--lane",
         choices=[lane.value for lane in SIM_LANES],
         default=Lane.CALIBRATION.value,
@@ -105,7 +106,27 @@ def build_parser() -> argparse.ArgumentParser:
             "held-out lane is not offered, only the eval run may open it"
         ),
     )
-    return parser
+    target.add_argument(
+        "--provider",
+        choices=["rules", *ENDPOINTS],
+        default="rules",
+        help=(
+            "who proposes: the offline rule stand-in, or a model endpoint "
+            "(its key goes in .env at the repository root)"
+        ),
+    )
+    target.add_argument(
+        "--model",
+        help="model id to use; falls back to WAJO_MODEL, then the endpoint's default",
+    )
+    target.add_argument(
+        "--trace",
+        metavar="PATH",
+        help=(
+            "append a JSONL trace of every decision to PATH: ids, hashes and bounded "
+            "records, with mail text and secrets replaced by digests"
+        ),
+    )
 
 
 def _view_note(show_labels: bool) -> str:
@@ -162,6 +183,56 @@ def sim_run(args: argparse.Namespace, out: IO[str]) -> int:
     return 0 if outcome.processed == len(cases) else 1
 
 
+def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
+    """Walk a fixture through the decision graph and say what each arrival ended in."""
+    manifest = (
+        Manifest.load(args.mail, mail_only=True) if args.mail else Manifest.load(args.fixture)
+    )
+    view = manifest.view(Lane(args.lane))
+    cases = view.cases
+    provider = build_provider(args.provider, model=args.model)
+    label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
+    mask = not args.no_mask
+    out.write(
+        f"fixture: {manifest.source}\n"
+        f"lane: {view.lane.value}  cases: {len(cases)}  seed: {args.seed}\n"
+        f"digest: {manifest.dataset_digest[:16]}\n"
+        f"proposal source: the {label} proposal\n"
+        f"provider view: {'masked subject and body' if mask else 'the raw mail'}\n\n"
+    )
+    sink = TraceSink(args.trace) if args.trace else None
+    try:
+        outcome = asyncio.run(
+            run_graph(
+                view,
+                seed=args.seed,
+                gateway=ProposalGateway(provider),
+                mask=mask,
+                trace=sink,
+            )
+        )
+    finally:
+        if sink is not None:
+            sink.close()
+
+    for index, case_id in enumerate(outcome.order, start=1):
+        ended = outcome.interrupts.get(case_id, "")
+        done = "committed" if case_id in {item.case_id for item in outcome.receipts} else ended
+        out.write(
+            f"[{index:>3}/{len(outcome.order)}] {case_id}  "
+            f"{outcome.routes.get(case_id, ''):<24} {done}\n"
+        )
+    out.write(
+        f"\nprocessed={outcome.processed} committed={len(outcome.receipts)} "
+        f"held={len(outcome.held)} refused={len(outcome.refusals)}\n"
+    )
+    for route, count in sorted(outcome.route_counts.items()):
+        out.write(f"    {route:<24} {count}\n")
+    if sink is not None:
+        out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
+    return 0 if outcome.processed == len(cases) else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``wajo`` console script."""
     # A key in .env is what makes --provider openrouter runnable; without this the file
@@ -171,6 +242,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     args = build_parser().parse_args(argv)
     out = sys.stdout
+    if (args.command, getattr(args, "graph_command", None)) == ("graph", "run"):
+        try:
+            return graph_run(args, out)
+        except KeyboardInterrupt:
+            out.write("\nstopped before the lane finished\n")
+            return 130
+        except (GraphError, ManifestError, SplitViolation, TraceError, OSError) as error:
+            # Foreseeable operational failures get one readable line, not a traceback.
+            out.write(f"cannot run: {error}\n")
+            return 2
     if (args.command, getattr(args, "sim_command", None)) == ("sim", "run"):
         try:
             return sim_run(args, out)

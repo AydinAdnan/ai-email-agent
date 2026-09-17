@@ -100,6 +100,46 @@ def strictest_allowed(verdict: SafetyVerdict) -> Route:
     return allowed[-1] if allowed else Route.ESCALATE
 
 
+def route_decision(
+    case: Case,
+    hints: Triage,
+    proposal: Proposal | None,
+    reason: str,
+    *,
+    source: str,
+) -> Decision:
+    """Apply the floor to a proposal and pick the route it leaves available.
+
+    One implementation for every caller: the reference policy here and the graph's nodes.
+    """
+    tool_name = proposal.tool_name if proposal is not None else None
+    payload = ActionPayload(
+        tool_name=tool_name or NO_ACTION_TOOL,
+        params=_params_with_case(dict(proposal.params) if proposal is not None else {}, case),
+    )
+    verdict = floor_check(payload, email=email_context_for(case))
+    wanted = proposal.route if proposal is not None else Route.ESCALATE
+    if wanted in verdict.allowed_routes:
+        route = wanted
+        if proposal is not None and verdict.rule_id is not None:
+            reason = f"{reason}; floor allowed it ({verdict.rule_id})"
+    else:
+        route = strictest_allowed(verdict)
+        reason = f"floor masked {wanted.value} ({verdict.rule_id}), falling back to {route.value}"
+    return Decision(
+        case_id=case.case_id,
+        route=route,
+        action_id=proposal.action_id if (proposal and proposal.action_id) else NO_ACTION_TOOL,
+        tool_name=tool_name or NO_ACTION_TOOL,
+        params=dict(proposal.params) if proposal is not None else {},
+        sender=case.event.message.sender.email,
+        reason=reason,
+        verdict=verdict,
+        source=source,
+        hints=hints,
+    )
+
+
 class ProposalPolicy:
     """Decide from the pipeline: mail in, triage, proposal, floor, route out."""
 
@@ -131,32 +171,7 @@ class ProposalPolicy:
         proposal: Proposal | None,
         reason: str,
     ) -> Decision:
-        tool_name = proposal.tool_name if proposal is not None else None
-        payload = ActionPayload(
-            tool_name=tool_name or NO_ACTION_TOOL,
-            params=_params_with_case(dict(proposal.params) if proposal is not None else {}, case),
-        )
-        verdict = floor_check(payload, email=email_context_for(case))
-        wanted = proposal.route if proposal is not None else Route.ESCALATE
-        if wanted in verdict.allowed_routes:
-            route = wanted
-            if proposal is not None and verdict.rule_id is not None:
-                reason = f"{reason}; floor allowed it ({verdict.rule_id})"
-        else:
-            route = strictest_allowed(verdict)
-            reason = f"floor masked {wanted.value} ({verdict.rule_id}), falling back to {route.value}"
-        return Decision(
-            case_id=case.case_id,
-            route=route,
-            action_id=proposal.action_id if (proposal and proposal.action_id) else NO_ACTION_TOOL,
-            tool_name=tool_name or NO_ACTION_TOOL,
-            params=dict(proposal.params) if proposal is not None else {},
-            sender=case.event.message.sender.email,
-            reason=reason,
-            verdict=verdict,
-            source=self.source,
-            hints=hints,
-        )
+        return route_decision(case, hints, proposal, reason, source=self.source)
 
 
 class GoldPolicy:
