@@ -36,7 +36,9 @@ packages = ["src/agent"]
 [tool.pytest.ini_options]
 # `agent` lives under src/, and the editable install is not guaranteed in every
 # context (CI installs it, a bare `pytest` may not).
-pythonpath = ["src"]
+# `evals/` is a package at the repository root, not under src/, so the root goes on the
+# path too: the scorer's tests import the same module the eval command runs.
+pythonpath = ["src", "."]
 
 [tool.ruff]
 target-version = "py311"

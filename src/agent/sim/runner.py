@@ -117,6 +117,10 @@ class SimOutcome:
     corrections: int = 0
     silent_ends: int = 0
     route_counts: dict[str, int] = field(default_factory=dict)
+    # Per case, in delivery order: the route it was given, and - where it waited - the
+    # code that said why. A report cannot count per case what the run never recorded.
+    routes: dict[str, str] = field(default_factory=dict)
+    asked: dict[str, str] = field(default_factory=dict)
     feedback: list[FeedbackEvent] = field(default_factory=list)
     replay_digest: str = ""
     receipts: list[Receipt] = field(default_factory=list)
@@ -254,6 +258,7 @@ class ChatRunner:
         self.last_decision = decision
         counts = self.outcome.route_counts
         counts[decision.route.value] = counts.get(decision.route.value, 0) + 1
+        self.outcome.routes[decision.case_id] = decision.route.value
         return decision
 
     def _act(self, decision: Decision) -> str:
@@ -284,12 +289,14 @@ class ChatRunner:
             # An approval only the user can give, which the reply parser reads.
             self.wait_code = waiting.code
             self.pending = prepared
+            self.outcome.asked[decision.case_id] = waiting.code
             self.outcome.awaiting_approval.append(prepared)
             self.outcome.refusals.append(f"{decision.case_id}: {waiting}")
             return f"prepared {prepared.summary()} [{waiting.code}: {_REFUSAL_WORDS[waiting.code]}]"
         except AuthorizationRefused as refusal:
             # Escalation: a human decides, so there is nothing to wait for here.
             self.wait_code = refusal.code
+            self.outcome.asked[decision.case_id] = refusal.code
             self.outcome.refusals.append(f"{decision.case_id}: {refusal}")
             return f"nothing prepared [{refusal.code}: {_REFUSAL_WORDS[refusal.code]}]"
 

@@ -277,6 +277,21 @@ def test_only_the_pipeline_routes_that_ask_wait_for_a_reply() -> None:
     assert outcome.interrupts == len(marked) == transcript.count("[waiting]")
 
 
+def test_the_run_records_a_route_per_case_and_who_it_waited_on() -> None:
+    """The eval curve is built from these two, so they have to be the run's own record."""
+    outcome, transcript = asyncio.run(run_typed({}, show_labels=True))
+    waiting = {
+        case_id
+        for case_id, route in zip(arrivals(transcript), labelled_routes(transcript), strict=True)
+        if Route(route) in INTERRUPTING
+    }
+
+    assert list(outcome.routes) == arrivals(transcript)
+    assert sum(outcome.route_counts.values()) == outcome.processed == len(outcome.routes)
+    assert set(outcome.asked) == waiting
+    assert set(outcome.asked.values()) <= {"APPROVAL_REQUIRED", "AUTHORIZATION_REFUSED"}
+
+
 def test_the_reference_policy_reproduces_the_dataset_routes() -> None:
     """The plan's check, against the labels: only ask-first and escalate lines wait."""
     expected = interrupting_case_ids()
