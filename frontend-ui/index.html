@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WAJO calibration</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>WAJO <span>calibration</span></h1>
+    <form id="controls">
+      <label>fixture
+        <select id="fixture">
+          <option value="tests/fixtures/stream_12.jsonl">stream_12 - 12 cases</option>
+          <option value="docs/wajo_dataset.jsonl">calibration lane - 60 cases</option>
+        </select>
+      </label>
+      <label>lane
+        <select id="lane">
+          <option value="calibration">calibration</option>
+          <option value="development">development</option>
+        </select>
+      </label>
+      <label>seed <input id="seed" type="number" value="7" min="0" step="1"></label>
+      <label>rules file <input id="store" value="preferences.jsonl" spellcheck="false"></label>
+      <label>provider
+        <select id="provider">
+          <option value="rules">rules</option>
+          <option value="openrouter">openrouter</option>
+        </select>
+      </label>
+      <button id="start" type="submit">start</button>
+      <button id="stop" type="button" disabled>stop</button>
+    </form>
+    <p id="status" class="status">idle. start a run, then answer a decision when one waits.</p>
+  </header>
+
+  <main>
+    <section id="transcript" aria-live="polite" aria-label="the inbox and what was done with it"></section>
+    <aside>
+      <h2>what it knows</h2>
+      <dl id="counts"></dl>
+      <h3>rules in force</h3>
+      <ul id="rules"><li class="empty">nothing yet</li></ul>
+      <h3>posteriors</h3>
+      <ul id="posteriors"><li class="empty">nothing yet</li></ul>
+      <p id="notice" class="notice"></p>
+    </aside>
+  </main>
+
+  <footer>
+    <form id="say">
+      <input id="line" placeholder="a decision that waits takes a line here" autocomplete="off" disabled>
+      <button id="send" type="submit" disabled>send</button>
+    </form>
+    <p class="hint">
+      Say what to do next time, not just this time: <em>ignore mail from someone@example.com</em>,
+      then <em>yes</em> to confirm the rule it echoes back. A decision the mail itself keeps for you
+      says so, and no rule changes it.
+    </p>
+  </footer>
+
+  <template id="mail-template">
+    <article class="block mail">
+      <p class="head"><span class="step"></span><span class="id"></span><span class="verdict"></span></p>
+      <p class="sender"></p>
+      <p class="subject"></p>
+      <p class="to"></p>
+      <ul class="prior"></ul>
+      <details class="body" open>
+        <summary>message</summary>
+        <div class="text"></div>
+      </details>
+      <p class="acted"><span class="label">did</span><span class="value"></span></p>
+    </article>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>
