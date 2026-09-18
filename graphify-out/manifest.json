@@ -1,0 +1,464 @@
+{
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\evals\\__init__.py": {
+    "mtime": 1789626768.4844024,
+    "seen": 1789705059.1587167,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\evals\\harness.py": {
+    "mtime": 1789626768.4864054,
+    "seen": 1789705059.1587248,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\evals\\metrics\\__init__.py": {
+    "mtime": 1789626768.4874024,
+    "seen": 1789705059.1587276,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\frontend-ui\\app.js": {
+    "mtime": 1789702636.9704359,
+    "seen": 1789705059.158729,
+    "ast_hash": "f3a297e5d234a1b8657bc9ed6b0b6a98",
+    "semantic_hash": "f3a297e5d234a1b8657bc9ed6b0b6a98"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\frontend-ui\\server.py": {
+    "mtime": 1789704055.001499,
+    "seen": 1789705059.1587305,
+    "ast_hash": "d32550cbe7149c12ee692a3de4c5b883",
+    "semantic_hash": "d32550cbe7149c12ee692a3de4c5b883"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\pyproject.toml": {
+    "mtime": 1789702636.9724355,
+    "seen": 1789705059.1587315,
+    "ast_hash": "37a8a851918acb1aaaf3a42b6c4000a4",
+    "semantic_hash": "37a8a851918acb1aaaf3a42b6c4000a4"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\__init__.py": {
+    "mtime": 1789626768.4894013,
+    "seen": 1789705059.158733,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\autonomy\\__init__.py": {
+    "mtime": 1789626768.49041,
+    "seen": 1789705059.158734,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\autonomy\\bandit.py": {
+    "mtime": 1789702636.9744377,
+    "seen": 1789705059.158735,
+    "ast_hash": "e3e003acdd4323a91b88d06c6ce2176c",
+    "semantic_hash": "e3e003acdd4323a91b88d06c6ce2176c"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\autonomy\\confidence.py": {
+    "mtime": 1789702636.9754362,
+    "seen": 1789705059.1587365,
+    "ast_hash": "eee15f6febabbc96787395b009e03b75",
+    "semantic_hash": "eee15f6febabbc96787395b009e03b75"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\autonomy\\preferences.py": {
+    "mtime": 1789702636.9764352,
+    "seen": 1789705059.1587374,
+    "ast_hash": "3e9d5c439b8eb53eb662b703d4108f10",
+    "semantic_hash": "3e9d5c439b8eb53eb662b703d4108f10"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\autonomy\\router.py": {
+    "mtime": 1789626768.4914024,
+    "seen": 1789705059.1587386,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\cli.py": {
+    "mtime": 1789702636.9764352,
+    "seen": 1789705059.1587398,
+    "ast_hash": "bac4242414e8953a7ade332d26d374b8",
+    "semantic_hash": "bac4242414e8953a7ade332d26d374b8"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\dataset.py": {
+    "mtime": 1789702636.9774592,
+    "seen": 1789705059.1587405,
+    "ast_hash": "7cc81326148e65af8579a59515015969",
+    "semantic_hash": "7cc81326148e65af8579a59515015969"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\events.py": {
+    "mtime": 1789702636.9774592,
+    "seen": 1789705059.1587415,
+    "ast_hash": "e96a38e094cd13dd842dd60750ad8551",
+    "semantic_hash": "e96a38e094cd13dd842dd60750ad8551"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\gateway.py": {
+    "mtime": 1789704065.9361126,
+    "seen": 1789705059.1587427,
+    "ast_hash": "d46431b387c2a8ef640e5d849fd25bf6",
+    "semantic_hash": "d46431b387c2a8ef640e5d849fd25bf6"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\graph.py": {
+    "mtime": 1789702636.9794366,
+    "seen": 1789705059.1587439,
+    "ast_hash": "70a4542dd05e4c88719a1f6b8ff11702",
+    "semantic_hash": "70a4542dd05e4c88719a1f6b8ff11702"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\learning\\__init__.py": {
+    "mtime": 1789702636.9804354,
+    "seen": 1789705059.1587448,
+    "ast_hash": "ba25f76b36a34caa936c50f25ca1d69d",
+    "semantic_hash": "ba25f76b36a34caa936c50f25ca1d69d"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\learning\\feedback.py": {
+    "mtime": 1789702636.9814372,
+    "seen": 1789705059.1587458,
+    "ast_hash": "18e945381c8f74b0bddf00e3c7914b61",
+    "semantic_hash": "18e945381c8f74b0bddf00e3c7914b61"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\loop.py": {
+    "mtime": 1789702636.9814372,
+    "seen": 1789705059.158747,
+    "ast_hash": "140765c9ae57650fbc1386b53d3a9492",
+    "semantic_hash": "140765c9ae57650fbc1386b53d3a9492"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\memory\\__init__.py": {
+    "mtime": 1789702636.9824355,
+    "seen": 1789705059.158748,
+    "ast_hash": "76fd08f177d6f158799d3f486e5fe431",
+    "semantic_hash": "76fd08f177d6f158799d3f486e5fe431"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\memory\\claims.py": {
+    "mtime": 1789702636.9834356,
+    "seen": 1789705059.1587489,
+    "ast_hash": "901c799ce89d475c01a9eb6de960b4dd",
+    "semantic_hash": "901c799ce89d475c01a9eb6de960b4dd"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\memory\\consent.py": {
+    "mtime": 1789702636.9834356,
+    "seen": 1789705059.1587508,
+    "ast_hash": "35f8901e989260a33e610d030a7c0843",
+    "semantic_hash": "35f8901e989260a33e610d030a7c0843"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\nodes\\__init__.py": {
+    "mtime": 1789626768.4924,
+    "seen": 1789705059.1587517,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\nodes\\execute.py": {
+    "mtime": 1789626768.4924,
+    "seen": 1789705059.1587527,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\nodes\\ingest.py": {
+    "mtime": 1789626768.4924,
+    "seen": 1789705059.1587539,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\nodes\\learn.py": {
+    "mtime": 1789626768.4924,
+    "seen": 1789705059.158755,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\nodes\\mask_pii.py": {
+    "mtime": 1789626768.4924,
+    "seen": 1789705059.158756,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\nodes\\spotlight.py": {
+    "mtime": 1789626768.493401,
+    "seen": 1789705059.1587572,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\nodes\\triage.py": {
+    "mtime": 1789626768.493401,
+    "seen": 1789705059.158758,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\pii\\__init__.py": {
+    "mtime": 1789702636.9844348,
+    "seen": 1789705059.1587589,
+    "ast_hash": "f019a765487fa6b4a5df53b07b79ac07",
+    "semantic_hash": "f019a765487fa6b4a5df53b07b79ac07"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\pii\\masker.py": {
+    "mtime": 1789702636.9854343,
+    "seen": 1789705059.1587598,
+    "ast_hash": "e2384d2c17e0f16651f9d9702693ec76",
+    "semantic_hash": "e2384d2c17e0f16651f9d9702693ec76"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\replay.py": {
+    "mtime": 1789702636.9854343,
+    "seen": 1789705059.158761,
+    "ast_hash": "c250391dc781a63981c8010236a3be21",
+    "semantic_hash": "c250391dc781a63981c8010236a3be21"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\safety\\__init__.py": {
+    "mtime": 1789702636.986436,
+    "seen": 1789705059.158762,
+    "ast_hash": "fef430c8c7377e33df619212ffb99f12",
+    "semantic_hash": "fef430c8c7377e33df619212ffb99f12"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\safety\\floor.py": {
+    "mtime": 1789702636.988436,
+    "seen": 1789705059.1587632,
+    "ast_hash": "957c25ded85cb1caebfdeb7b58b84589",
+    "semantic_hash": "957c25ded85cb1caebfdeb7b58b84589"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\safety\\injection.py": {
+    "mtime": 1789702636.989435,
+    "seen": 1789705059.1587641,
+    "ast_hash": "7278c1b1f49b69812a999cfe669526b0",
+    "semantic_hash": "7278c1b1f49b69812a999cfe669526b0"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\sim\\__init__.py": {
+    "mtime": 1789702636.989435,
+    "seen": 1789705059.158765,
+    "ast_hash": "981cb84a75e462e449ab793f543be270",
+    "semantic_hash": "981cb84a75e462e449ab793f543be270"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\sim\\policy.py": {
+    "mtime": 1789702636.9904375,
+    "seen": 1789705059.158766,
+    "ast_hash": "2c01a640d2c4a8599b12d24a2cd5edde",
+    "semantic_hash": "2c01a640d2c4a8599b12d24a2cd5edde"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\sim\\reply_tree.py": {
+    "mtime": 1789702636.991436,
+    "seen": 1789705059.1587675,
+    "ast_hash": "ade239a12093ae8f6fa7e4dd10aaf432",
+    "semantic_hash": "ade239a12093ae8f6fa7e4dd10aaf432"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\sim\\runner.py": {
+    "mtime": 1789702636.9924357,
+    "seen": 1789705059.1587684,
+    "ast_hash": "bfbdb6f83eb1d102ad7658bdf271b1f1",
+    "semantic_hash": "bfbdb6f83eb1d102ad7658bdf271b1f1"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\sim\\schedule.py": {
+    "mtime": 1789702636.9924357,
+    "seen": 1789705059.1587696,
+    "ast_hash": "0028450d3b6bcbce9bc59aeb1e8618e5",
+    "semantic_hash": "0028450d3b6bcbce9bc59aeb1e8618e5"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\state.py": {
+    "mtime": 1789702636.9934359,
+    "seen": 1789705059.1587708,
+    "ast_hash": "300070463b225d995313871548726ed0",
+    "semantic_hash": "300070463b225d995313871548726ed0"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\tools\\__init__.py": {
+    "mtime": 1789702636.9944363,
+    "seen": 1789705059.1587718,
+    "ast_hash": "936b78a18fb3cbc8f981476b0e56cb47",
+    "semantic_hash": "936b78a18fb3cbc8f981476b0e56cb47"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\tools\\email_tools.py": {
+    "mtime": 1789702636.995438,
+    "seen": 1789705059.1587734,
+    "ast_hash": "73e62cbef93987765e95482146596054",
+    "semantic_hash": "73e62cbef93987765e95482146596054"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\tools\\registry.py": {
+    "mtime": 1789702636.9964387,
+    "seen": 1789705059.1587746,
+    "ast_hash": "900ba7a78e085aa7e128773ad8598324",
+    "semantic_hash": "900ba7a78e085aa7e128773ad8598324"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\trace.py": {
+    "mtime": 1789702636.9964387,
+    "seen": 1789705059.1587756,
+    "ast_hash": "4baa21b02e461f0c2750b7395355784d",
+    "semantic_hash": "4baa21b02e461f0c2750b7395355784d"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\triage.py": {
+    "mtime": 1789702636.9974365,
+    "seen": 1789705059.1587765,
+    "ast_hash": "ab74535e8cf5390d959c09c54e779f6a",
+    "semantic_hash": "ab74535e8cf5390d959c09c54e779f6a"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\ui\\__init__.py": {
+    "mtime": 1789702636.9984355,
+    "seen": 1789705059.1587777,
+    "ast_hash": "977770f9c7f8a1404a005a5958892a45",
+    "semantic_hash": "977770f9c7f8a1404a005a5958892a45"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\src\\agent\\ui\\session.py": {
+    "mtime": 1789702636.9984355,
+    "seen": 1789705059.1587787,
+    "ast_hash": "a84d9c6c77ba9081f76557d1f3044451",
+    "semantic_hash": "a84d9c6c77ba9081f76557d1f3044451"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\__init__.py": {
+    "mtime": 1789626768.5004013,
+    "seen": 1789705059.1587794,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\learning\\test_feedback_parser.py": {
+    "mtime": 1789702637.0004368,
+    "seen": 1789705059.1587803,
+    "ast_hash": "5a4c27f717bd90c358448550383f94a5",
+    "semantic_hash": "5a4c27f717bd90c358448550383f94a5"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\learning\\test_updates.py": {
+    "mtime": 1789702637.0014365,
+    "seen": 1789705059.1587815,
+    "ast_hash": "3fff3b1bb7e25c880914e569372a02d1",
+    "semantic_hash": "3fff3b1bb7e25c880914e569372a02d1"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\memory\\test_claim_schema.py": {
+    "mtime": 1789702637.0014365,
+    "seen": 1789705059.1587825,
+    "ast_hash": "ca2897e448f7e20a427ee81714de8381",
+    "semantic_hash": "ca2897e448f7e20a427ee81714de8381"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_beta_store.py": {
+    "mtime": 1789702637.002436,
+    "seen": 1789705059.1587834,
+    "ast_hash": "27d4af34012b4da85e3528e6b18d07d5",
+    "semantic_hash": "27d4af34012b4da85e3528e6b18d07d5"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_consent.py": {
+    "mtime": 1789702637.002436,
+    "seen": 1789705059.1587846,
+    "ast_hash": "f1e8d4bb4b963ab4ffda849b32bdf06b",
+    "semantic_hash": "f1e8d4bb4b963ab4ffda849b32bdf06b"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_events.py": {
+    "mtime": 1789702637.003436,
+    "seen": 1789705059.1587853,
+    "ast_hash": "37e6d03620f796810605f423a3871a16",
+    "semantic_hash": "37e6d03620f796810605f423a3871a16"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_floor.py": {
+    "mtime": 1789702637.0044384,
+    "seen": 1789705059.1587865,
+    "ast_hash": "1d1906d89385d8399a55cd61b4dbefb5",
+    "semantic_hash": "1d1906d89385d8399a55cd61b4dbefb5"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_gateway.py": {
+    "mtime": 1789702637.0054395,
+    "seen": 1789705059.1587875,
+    "ast_hash": "40d4bf3933c51e08e5d2f35cd65d3ab1",
+    "semantic_hash": "40d4bf3933c51e08e5d2f35cd65d3ab1"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_graph.py": {
+    "mtime": 1789702637.0064368,
+    "seen": 1789705059.1587887,
+    "ast_hash": "52201e20b205a4227e4b076989ae09d8",
+    "semantic_hash": "52201e20b205a4227e4b076989ae09d8"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_graph_resume.py": {
+    "mtime": 1789702637.0064368,
+    "seen": 1789705059.1587896,
+    "ast_hash": "f2dcfa8e65f33aefc44832cedc2deef8",
+    "semantic_hash": "f2dcfa8e65f33aefc44832cedc2deef8"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_graph_state.py": {
+    "mtime": 1789702637.0074365,
+    "seen": 1789705059.1587906,
+    "ast_hash": "0fc5e1490d321a3074d99e6fe6a3c609",
+    "semantic_hash": "0fc5e1490d321a3074d99e6fe6a3c609"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_loop.py": {
+    "mtime": 1789702637.0074365,
+    "seen": 1789705059.1587918,
+    "ast_hash": "eeab110bb66bc44c75347ec54ad04452",
+    "semantic_hash": "eeab110bb66bc44c75347ec54ad04452"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_pii.py": {
+    "mtime": 1789702637.008436,
+    "seen": 1789705059.1587927,
+    "ast_hash": "1f96f93d23a9678ad4820a965cd07b9d",
+    "semantic_hash": "1f96f93d23a9678ad4820a965cd07b9d"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_replay.py": {
+    "mtime": 1789702637.008436,
+    "seen": 1789705059.1587937,
+    "ast_hash": "930d71245bbcfda6a0e3b29e1e7f59b4",
+    "semantic_hash": "930d71245bbcfda6a0e3b29e1e7f59b4"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_router.py": {
+    "mtime": 1789626768.5023997,
+    "seen": 1789705059.1587944,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_schedule.py": {
+    "mtime": 1789702637.0094354,
+    "seen": 1789705059.1587956,
+    "ast_hash": "9065a7ea2323a08feae84d5c8e079d8e",
+    "semantic_hash": "9065a7ea2323a08feae84d5c8e079d8e"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_sim.py": {
+    "mtime": 1789702637.0094354,
+    "seen": 1789705059.1587965,
+    "ast_hash": "7456b987f25503d02609c0b5c1759c3b",
+    "semantic_hash": "7456b987f25503d02609c0b5c1759c3b"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_sim_tools.py": {
+    "mtime": 1789702637.0104356,
+    "seen": 1789705059.1587975,
+    "ast_hash": "26cd4e2a3f7e81756fb169f1771cd3fe",
+    "semantic_hash": "26cd4e2a3f7e81756fb169f1771cd3fe"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_triage.py": {
+    "mtime": 1789702637.011448,
+    "seen": 1789705059.1587987,
+    "ast_hash": "e7e380bd4bdf2762545b8301efc44630",
+    "semantic_hash": "e7e380bd4bdf2762545b8301efc44630"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\test_ui_session.py": {
+    "mtime": 1789702637.0124373,
+    "seen": 1789705059.1587996,
+    "ast_hash": "32b521b4362a7bf0ae1744192f813110",
+    "semantic_hash": "32b521b4362a7bf0ae1744192f813110"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\.agent\\rules\\graphify.md": {
+    "mtime": 1789704706.4729896,
+    "seen": 1789705059.1588008,
+    "ast_hash": "3eaf8f33a49bb96d2a07bcf8912673c6",
+    "semantic_hash": "3eaf8f33a49bb96d2a07bcf8912673c6"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\.agent\\workflows\\graphify.md": {
+    "mtime": 1789704706.475993,
+    "seen": 1789705059.1588023,
+    "ast_hash": "b2d569f153a02e07a1fdf71dc1fced08",
+    "semantic_hash": "b2d569f153a02e07a1fdf71dc1fced08"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\.github\\workflows\\ci.yml": {
+    "mtime": 1789702636.9684353,
+    "seen": 1789705059.1588032,
+    "ast_hash": "5238be89c5eacfe0bdcc9fc14365e603",
+    "semantic_hash": "5238be89c5eacfe0bdcc9fc14365e603"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\DESIGN.md": {
+    "mtime": 1789626768.4844024,
+    "seen": 1789705059.1588042,
+    "ast_hash": "3b987c838a954b1331a4aa4bdaed4120",
+    "semantic_hash": "3b987c838a954b1331a4aa4bdaed4120"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\README.md": {
+    "mtime": 1789626768.4844024,
+    "seen": 1789705059.1588051,
+    "ast_hash": "b6654a2be620efc35ab50f0c8ec96f87",
+    "semantic_hash": "b6654a2be620efc35ab50f0c8ec96f87"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\frontend-ui\\index.html": {
+    "mtime": 1789702636.9704359,
+    "seen": 1789705059.1588063,
+    "ast_hash": "e7107920415d8cfc0c8252307f900545",
+    "semantic_hash": "e7107920415d8cfc0c8252307f900545"
+  },
+  "C:\\Users\\aydin\\Desktop\\CodeFiles\\ai-email-agent\\tests\\adversarial_cases.yaml": {
+    "mtime": 1789626768.5014248,
+    "seen": 1789705059.1588073,
+    "ast_hash": "34f8bea8d70d01286709ca7f8cb579e1",
+    "semantic_hash": "34f8bea8d70d01286709ca7f8cb579e1"
+  }
+}
