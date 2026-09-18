@@ -20,7 +20,6 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from typing import Any, Protocol
 
 from agent.events import Message
@@ -547,14 +546,10 @@ def build_provider(
     if endpoint is None:
         known = ", ".join((RuleProvider.name, *ENDPOINTS))
         raise ProposalError(f"unknown provider {name!r}; known providers: {known}")
+    # Reading .env is the entry point's job (cli.main and the UI server both do it), so
+    # this stays environment-only: a provider built here fails closed when the key is
+    # absent, instead of silently picking one up off disk.
     api_key = os.environ.get(endpoint.api_key_env, "")
-    if not api_key:
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-            api_key = os.environ.get(endpoint.api_key_env, "")
-        except ImportError:
-            pass
     if not api_key:
         raise ProposalError(
             f"{endpoint.api_key_env} is not set, so {name} cannot run; put it in .env at the "
