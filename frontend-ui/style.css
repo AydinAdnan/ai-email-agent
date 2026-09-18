@@ -191,6 +191,33 @@ aside {
 
 .block.mail .verdict[hidden] { display: none; }
 
+/* ---- the reply an ask arrives with ----
+   The run prints the draft as one block and the page moves it inside the card it belongs
+   to, above the buttons: the reply is what those buttons decide about. Indentation is kept
+   rather than flattened - the body sits under the subject and the gaps under the facts. */
+
+.block.draft {
+  max-width: 74ch;
+  border: 1px dashed var(--ink);
+  font-size: 13px;
+}
+
+.block.draft p.label { margin-bottom: 6px !important; }
+
+.block.mail .draft {
+  margin-top: 10px;
+  width: auto;
+  border: 1px dashed var(--ink);
+}
+
+.block.draft pre,
+.block.mail .draft pre {
+  margin: 0;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* What a person can say about mail like this, in the words the run itself reads: the same
    line a typed answer would be, so a click and a line are the same input. */
 .actions {

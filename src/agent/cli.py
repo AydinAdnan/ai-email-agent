@@ -409,6 +409,12 @@ def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
     )
     for item in outcome.held:
         out.write(f"    waiting on you: {item.case_id} {item.digest[:12]} {item.summary()}\n")
+        # The draft the ask carries, printed where the wait is: reading the run should show
+        # what is being asked about, not only that something is.
+        decided = session.context.decisions.get(item.case_id)
+        draft = decided.predraft if decided is not None else None
+        if draft is not None:
+            out.write("\n".join(f"    {line}" if line else "" for line in draft.lines()) + "\n")
     for route, count in sorted(outcome.route_counts.items()):
         out.write(f"    {route:<24} {count}\n")
     if note:

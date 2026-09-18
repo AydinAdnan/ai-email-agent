@@ -67,6 +67,10 @@ def classify(text: str) -> str:
         return "summary"
     if text.lstrip().startswith(RUN_FACTS):
         return "meta"
+    # The predraft an ask carries: one block, kept apart from the run's chatter so the page
+    # can put it inside the message it answers.
+    if text.lstrip().startswith("draft for "):
+        return "draft"
     return "note"
 
 

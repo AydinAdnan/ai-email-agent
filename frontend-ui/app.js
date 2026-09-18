@@ -20,6 +20,8 @@ const MAIL_FIELD = /^\s{2}(From|To|Subject|Thread|prior|Acted):\s*(.*)$/;
 const MAIL_HEAD = /^\[\s*(\d+\/\d+)\]\s*(.*)$/;
 const REPLY_LINE = /^\s*reply for (\S+):\s*'([\s\S]*)'\s*$/;
 const VERDICT = /\[([A-Z_]+):/;
+// The case a draft answers, from the head line the run prints for it.
+const DRAFT_HEAD = /^\s*draft for (\S+) ->/;
 
 // The four routes as the plan names them, each with the colour the page shows it in.
 const ROUTES = {
@@ -161,10 +163,45 @@ function renderBlock(block, state) {
     renderMail(block, state);
   } else if (block.kind === "summary") {
     renderSummary(block);
+  } else if (block.kind === "draft") {
+    renderDraft(block, state);
   } else if (["note", "wait", "reply"].includes(block.kind)) {
     renderSaid(block);
   } else {
     renderRaw(block);
+  }
+}
+
+// The predraft an ask carries, one block, tagged with the decision it belongs to so the
+// card can take it back. The case comes out of the block's own head rather than from the
+// current state: a poll can carry a draft and a decision one case further on in the same
+// batch, and the reply has to land in the message it answers. Indentation is the draft's
+// own layout, so it is not flattened.
+function renderDraft(block, state) {
+  const node = document.createElement("div");
+  node.className = "block draft";
+  const named = block.text.match(DRAFT_HEAD);
+  node.dataset.case = named ? named[1] : state.case || "";
+  const label = document.createElement("p");
+  label.className = "label";
+  label.textContent = "draft reply - nothing is sent";
+  const text = document.createElement("pre");
+  text.textContent = block.text.replace(/\s+$/, "");
+  node.append(label, text);
+  el("transcript").append(node);
+  placeDraft(node.dataset.case, node);
+}
+
+// The draft belongs inside the card it answers, and above the buttons that decide it. The
+// buttons are only built for the decision currently waiting, so a draft that arrives for a
+// card with no buttons yet still goes into the card - otherwise a page opened mid-run would
+// show earlier drafts underneath their mail instead of in it.
+function placeDraft(caseId, node = document.querySelector(`.block.draft[data-case="${caseId}"]`)) {
+  const card = document.querySelector(`.block.mail[data-case="${caseId}"]`);
+  if (node && card) {
+    // insertBefore with nothing to insert before appends, which is what a card with no
+    // buttons yet wants.
+    card.insertBefore(node, card.querySelector(".actions"));
   }
 }
 
@@ -316,6 +353,8 @@ function renderActions(state) {
     }
   }
   card.append(row);
+  // One rendering of the reply, in the order it is read: mail, draft, buttons.
+  placeDraft(state.case);
 }
 
 async function poll() {

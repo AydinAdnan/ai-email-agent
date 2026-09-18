@@ -179,7 +179,12 @@ def test_a_crash_before_the_work_ran_leaves_the_decision_waiting():
     asyncio.run(run.run())
     held = {item.case_id: item for item in run.outcome.held}
     # Nothing has run: the decision is prepared, and its thread still holds the question.
-    assert held[ASKED].blocked
+    # The ask carries the predraft, so there is a step and nothing blocked - an ask that
+    # arrives with the reply already written is what the draft route is for.
+    prepared = held[ASKED]
+    assert not prepared.blocked
+    assert [step.tool for step in prepared.steps] == ["create_draft"]
+    assert str(prepared.steps[0].params["body"]).strip()
     values = asyncio.run(run._checkpointed({"configurable": {"thread_id": run.thread_for(ASKED)}}))
     assert values["interrupt"]["code"] == "APPROVAL_REQUIRED"
     assert values.get("receipt", {}) == {}

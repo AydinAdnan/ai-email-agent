@@ -64,6 +64,7 @@ from agent.sim.reply_tree import ReplyTree, build_reply_tree
 from agent.sim.schedule import WINDOW_SIZE, Window, schedule
 from agent.state import (
     GraphState,
+    draft_fields,
     hint_fields,
     message_digest,
     prepared_fields,
@@ -329,6 +330,7 @@ class ChatRunner:
             },
             "floor": verdict_fields(decision.verdict),
             "routing": routing_fields(decision.routing),
+            "draft": draft_fields(decision.drafting, sender=message.sender.email),
             "route": decision.route.value,
             "action_id": decision.action_id,
             "prepared": prepared_fields(self.last_prepared),
@@ -353,6 +355,16 @@ class ChatRunner:
             self._emit(
                 "        no rule quietens this one: it stays your call, so decide it here"
             )
+        # The predraft is the point of the ask: it arrives written, with what it read and
+        # what it could not answer, so the user is editing rather than composing. It goes
+        # out as one block - a draft is one thing, and a page or a transcript that shows it
+        # as a dozen lines is a dozen things.
+        draft = decision.predraft
+        if draft is not None:
+            shown = list(draft.lines())
+            if decision.drafting is not None:
+                shown.append(f"    style: {decision.drafting.style.describe()}")
+            self._emit("\n".join(line for line in shown))
         if self.on_interrupt is not None:
             await self.on_interrupt(index, decision)
 

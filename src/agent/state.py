@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from agent.drafts import Drafting
 from agent.events import Message
 from agent.safety.floor import SafetyVerdict
 from agent.tools.registry import PreparedAction, Receipt
@@ -40,6 +41,9 @@ class GraphState(TypedDict, total=False):
     # What the router considered: the ballot, the posteriors, and the cost of every
     # alternative it scored, so a route can be read back rather than re-derived.
     routing: dict[str, Any]
+    # The predraft the ask carries: what it read and what it could not answer. Sizes,
+    # labels and codes - the reply itself belongs on the user's screen.
+    draft: dict[str, Any]
     pii: dict[str, Any]
     route: str
     action_id: str
@@ -126,6 +130,30 @@ def routing_fields(routing: Routing | None) -> dict[str, Any]:
             }
             for loss in routing.alternatives
         ],
+    }
+
+
+def draft_fields(drafting: Drafting | None, *, sender: str = "") -> dict[str, Any]:
+    """The predraft as traceable fields: sizes, labels and a code, never the reply.
+
+    The address the draft answers is deliberately not carried: a key naming one is redacted
+    on sight, and the question worth recording is whether it was the right person at all -
+    which is why ``right_person`` is named for the answer rather than for the address.
+    """
+    if drafting is None:
+        return {}
+    draft = drafting.draft
+    return {
+        "chars": len(draft.body),
+        "right_person": draft.recipient.strip().lower() == sender.strip().lower(),
+        "style": [
+            f"{item.reason}: {item.example.source_message_id}" for item in drafting.style.picked
+        ],
+        "facts": [f"{fact.label} <- {fact.origin}" for fact in draft.facts],
+        # Gap labels only: which question was left open, not the words it was asked in.
+        "gaps": [gap.split(":", 1)[0] for gap in draft.unresolved],
+        "no_send": draft.no_send,
+        "refused": drafting.validation.code if not drafting.ok else "",
     }
 
 

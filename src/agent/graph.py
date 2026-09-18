@@ -21,6 +21,7 @@ from agent.sim.policy import Decision, route_decision
 from agent.sim.schedule import WINDOW_SIZE, schedule
 from agent.state import (
     GraphState,
+    draft_fields,
     hint_fields,
     message_digest,
     prepared_fields,
@@ -205,6 +206,9 @@ async def route(state: GraphState, context: GraphRuntime) -> GraphState:
         "action_id": decision.action_id,
         "floor": verdict_fields(decision.verdict),
         "routing": routing_fields(decision.routing),
+        "draft": draft_fields(
+            decision.drafting, sender=_case(state, context).event.message.sender.email
+        ),
     }
 
 

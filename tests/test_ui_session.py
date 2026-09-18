@@ -121,6 +121,24 @@ def test_an_escalation_says_no_rule_can_quieten_it(tmp_path):
     wait_until(session, what="done")
 
 
+def test_the_draft_reaches_the_page_as_one_block(tmp_path):
+    """The ask is for the user to edit: the reply, its facts and its gaps arrive together."""
+    session = Session(fixture=FIXTURE, seed=7, store_path=tmp_path / "prefs.jsonl")
+    session.start()
+    wait_until(session, what="waiting")
+
+    drafts = [block for block in session.since(0) if block.kind == "draft"]
+    assert len(drafts) == 1, "one draft, one block: a reply is one thing"
+    assert "nothing is sent" in drafts[0].text
+    assert "gaps (1):" in drafts[0].text
+    assert "facts:" in drafts[0].text
+    assert "style:" in drafts[0].text
+    assert "[needs your answer: question 1]" in drafts[0].text
+
+    session.stop()
+    wait_until(session, what="done")
+
+
 def test_a_line_is_refused_when_nothing_waits():
     session = Session(fixture=FIXTURE, seed=7, store_path=None)
     with pytest.raises(RuntimeError, match="nothing is waiting"):

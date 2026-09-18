@@ -23,6 +23,7 @@ from agent.autonomy.confidence import Bucket
 from agent.autonomy.preferences import RememberedProvider
 from agent.autonomy.router import Router, Routing, RoutingRequest, mail_risk
 from agent.dataset import Case
+from agent.drafts import DRAFTING_TOOLS, Drafting, Predraft, drafting_for
 from agent.events import Message
 from agent.gateway import (
     NO_ACTION_TOOL,
@@ -70,11 +71,22 @@ class Decision:
     # What the router considered, when one is running: the ballot, the posteriors, and the
     # cost of every alternative. None for a reference decision, which does not route.
     routing: Routing | None = None
+    # The predraft this decision wrote, if its action is one that drafts: what it read,
+    # what it says, and whether it may be shown. Kept even when it was withheld, so the
+    # reason survives into the trace.
+    drafting: Drafting | None = None
 
     @property
     def interrupts(self) -> bool:
         """Whether this route has to wait for the user."""
         return self.route in INTERRUPTING_ROUTES
+
+    @property
+    def predraft(self) -> Predraft | None:
+        """The draft this ask shows, or None when it shows none."""
+        if self.drafting is None or not self.drafting.ok:
+            return None
+        return self.drafting.draft if self.route is Route.ASK_FIRST_WITH_PREDRAFT else None
 
 
 def email_context_for(case: Case) -> EmailContext:
@@ -202,11 +214,16 @@ def route_decision(
     as ``quietenable`` is asking - and skips the learner's opinion entirely.
     """
     tool_name = proposal.tool_name if proposal is not None else None
+    params = dict(proposal.params) if proposal is not None else {}
     payload = ActionPayload(
         tool_name=tool_name or NO_ACTION_TOOL,
-        params=_params_with_case(dict(proposal.params) if proposal is not None else {}, case),
+        params=_params_with_case(params, case),
     )
+    # The floor judges the action as proposed. The predraft is the *content* of an ask, so
+    # its own words stay out of this payload: a draft quoting an invoice would otherwise
+    # change the action's class and escalate the very mail it was written to answer.
     verdict = floor_check(payload, email=email_context_for(case))
+    drafting = drafting_for(case, intent=hints.intent) if tool_name in DRAFTING_TOOLS else None
     routing: Routing | None = None
     if router is not None:
         named = named_route(provider, case.event.message, hints) if provider is not None else None
@@ -222,18 +239,29 @@ def route_decision(
         else:
             route = strictest_allowed(verdict)
             reason = f"floor masked {wanted.value} ({verdict.rule_id}), falling back to {route.value}"
+    if route is Route.ASK_FIRST_WITH_PREDRAFT and drafting is not None:
+        if drafting.ok:
+            # The ask carries the draft: same action, with the reply already written and
+            # addressed to whoever wrote.
+            params = {**params, **drafting.draft.params()}
+        else:
+            # Nothing to ask with is not a licence to ask anyway: a reply the user cannot
+            # trust is worse than a mail handed back, which is what escalating is.
+            route = Route.ESCALATE
+            reason = f"{reason}; {drafting.validation.code}: {drafting.validation.detail}"
     return Decision(
         case_id=case.case_id,
         route=route,
         action_id=proposal.action_id if (proposal and proposal.action_id) else NO_ACTION_TOOL,
         tool_name=tool_name or NO_ACTION_TOOL,
-        params=dict(proposal.params) if proposal is not None else {},
+        params=params,
         sender=case.event.message.sender.email,
         reason=reason,
         verdict=verdict,
         source=source,
         hints=hints,
         routing=routing,
+        drafting=drafting,
     )
 
 
@@ -322,6 +350,7 @@ class GoldPolicy:
 __all__ = [
     "INTERRUPTING_ROUTES",
     "Decision",
+    "Drafting",
     "GoldPolicy",
     "ProposalPolicy",
     "email_context_for",

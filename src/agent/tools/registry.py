@@ -386,7 +386,21 @@ def _notify_text(action_id: str) -> str:
 
 def _params_brief(params: Mapping[str, Any]) -> str:
     shown = {key: value for key, value in params.items() if key not in {"case_id", "email_id"}}
-    return ", ".join(f"{key}={value!r}" for key, value in sorted(shown.items()))
+    return ", ".join(f"{key}={_brief(value)}" for key, value in sorted(shown.items()))
+
+
+def _brief(value: Any, *, width: int = 32, words: int = 3) -> str:
+    """A short value as itself, a long one as its size.
+
+    One line has to stay one line, and a summary is not a place for mail text: a drafted
+    reply carries a subject and a body, and either one would put what a human should read
+    into what a transcript and a trace record. The draft itself is shown by whoever wrote
+    it, so a size is all this has to say.
+    """
+    shown = repr(value)
+    if len(shown) <= width and len(shown.split()) <= words:
+        return shown
+    return f"<{len(shown)} chars>"
 
 
 def _digest(
