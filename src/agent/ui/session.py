@@ -195,8 +195,10 @@ class Session:
             self.error = f"{type(error).__name__}: {error}"
         finally:
             self.waiting = False
-            self.done = True
+            # The rules go to disk before the session is called finished: a reader that
+            # sees the flag and then looks at the file must not find the file behind.
             self.add(f"session ended: {self.store.save()} rule(s) in force")
+            self.done = True
 
     async def _waited(self, index: int, decision: Decision) -> None:
         """Called while a decision is on screen and before its line is read."""

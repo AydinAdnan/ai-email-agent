@@ -209,7 +209,7 @@ class ChatRunner:
         """Deliver every case in the lane, window by window, in the order the seed drew."""
         deliveries = tuple(case for item in self.windows for case in item.cases)
         self._emit(
-            f"schedule: {len(deliveries)} cases in {len(self.windows)} window(s) of up to "
+            f"schedule: {len(deliveries)} case(s) in {len(self.windows)} window(s) of up to "
             f"{self.window}, order drawn from seed {self.seed}"
         )
         for index, case in enumerate(deliveries, start=1):
