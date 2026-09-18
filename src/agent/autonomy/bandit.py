@@ -16,13 +16,24 @@ APPROVING_KINDS = frozenset(
     {FeedbackKind.APPROVE, FeedbackKind.ALWAYS_DO_THIS, FeedbackKind.EDIT_DRAFT}
 )
 
+# Undoing the agent's work points against it whatever route that work was, so these kinds
+# decide the direction on their own and a named route does not flip them.
+DISAPPROVING_KINDS = frozenset({FeedbackKind.REJECT, FeedbackKind.REVERT})
+
 
 def is_approving(event: FeedbackEvent) -> bool:
     """Whether this reading is a vote for the agent acting on its own.
 
+    The route a reading names is the route the agent had chosen, so the direction comes
+    from what the user did to it: an approval keeps that work, and a revert or a
+    rejection undoes it. A revert of an autonomous action is therefore a vote against
+    autonomy, which is the reading it would get backwards if the kind were ignored.
+
     Shared with the router, which adapts a bucket's cutoffs on the same reading rather than
     deciding a second time what the user meant.
     """
+    if event.kind in DISAPPROVING_KINDS:
+        return False
     if event.chosen_route is not None:
         return event.chosen_route in AUTONOMOUS_ROUTES
     return event.kind in APPROVING_KINDS
@@ -114,4 +125,10 @@ class Learner:
         self.blocks[name] = (scope, event.chosen_action_id)
 
 
-__all__ = ["AUTONOMOUS_ROUTES", "Learner", "is_approving"]
+__all__ = [
+    "APPROVING_KINDS",
+    "AUTONOMOUS_ROUTES",
+    "DISAPPROVING_KINDS",
+    "Learner",
+    "is_approving",
+]

@@ -155,6 +155,10 @@ class Router:
         self.costs = costs
         self.thresholds = thresholds if thresholds is not None else ThresholdStore()
         self.routings = 0
+        # Event ids whose cutoffs have already moved. A decision replayed - a resumed ask,
+        # a lane run twice - must adapt the thresholds once, the same way the learner
+        # counts the posterior once, or a replay would quietly relax its own bucket.
+        self.adapted: set[str] = set()
 
     def route(self, request: RoutingRequest) -> Routing:
         """Choose one route for one arrival."""
@@ -196,13 +200,15 @@ class Router:
         )
 
     def observe(self, event: FeedbackEvent, bucket: Bucket) -> bool:
-        """Adapt one bucket's cutoffs from one explicit decision, called once per decision.
+        """Adapt one bucket's cutoffs from one explicit decision, at most once.
 
-        Silence teaches nothing here either, which is why the caller only reports decisions
-        the learner already counted.
+        Silence teaches nothing here either, and a repeated event id teaches nothing the
+        second time: the check mirrors the learner's, so the cutoffs can only move on a
+        reading that moved a posterior.
         """
-        if not is_learnable(event.kind):
+        if not is_learnable(event.kind) or event.event_id in self.adapted:
             return False
+        self.adapted.add(event.event_id)
         self.thresholds.adapt(bucket, approved=is_approving(event))
         return True
 
