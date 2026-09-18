@@ -183,11 +183,11 @@ def test_lane_counts_are_reported(manifest):
     summary = manifest.summary()
     assert summary["learning_stream"] == 60
     assert summary["development"] == 20
-    assert summary["golden_ordinary"] == 40
+    assert summary["golden_ordinary"] == 38
     assert summary["golden_adversarial"] == 20
     assert summary["lane:calibration"] == 60
     assert summary["lane:development"] == 20
-    assert summary["lane:held_out"] == 60
+    assert summary["lane:held_out"] == 58
 
 
 def test_dataset_digest_matches_the_file(manifest):
@@ -196,7 +196,7 @@ def test_dataset_digest_matches_the_file(manifest):
 
 
 def test_a_broken_line_reports_its_number_and_file(tmp_path):
-    """A JSON error has to say which line, or a 140-line dataset is a guessing game."""
+    """A JSON error has to say which line, or a 138-line case set is a guessing game."""
     broken = tmp_path / "broken.jsonl"
     good = DEFAULT_DATASET_PATH.read_text(encoding="utf-8").splitlines()[0]
     broken.write_text(f"{good}\n{{not json}}\n", encoding="utf-8")

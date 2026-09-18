@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from agent.dataset import DEFAULT_DATASET_PATH
 from agent.safety.floor import (
     ALL_ROUTES,
     FLOOR_RULES,
@@ -580,7 +581,7 @@ def test_verdict_immutability():
 # 9. Route Vocabulary Parity With The Dataset
 # ============================================================================
 
-DATASET_PATH = Path(__file__).parent.parent / "docs" / "wajo_dataset.jsonl"
+DATASET_PATH = DEFAULT_DATASET_PATH
 
 
 def test_route_vocabulary_is_the_dataset_vocabulary():

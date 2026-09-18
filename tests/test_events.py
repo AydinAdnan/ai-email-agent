@@ -9,11 +9,10 @@ Covers:
 """
 import json
 from dataclasses import FrozenInstanceError
-from pathlib import Path
 
 import pytest
 
-from agent.dataset import event_from_row
+from agent.dataset import DEFAULT_DATASET_PATH, event_from_row
 from agent.events import (
     EVENT_SCHEMA_VERSION,
     LEARNABLE_FEEDBACK_KINDS,
@@ -33,7 +32,7 @@ from agent.events import (
 )
 from agent.safety.floor import Route
 
-DATASET_PATH = Path(__file__).parent.parent / "docs" / "wajo_dataset.jsonl"
+DATASET_PATH = DEFAULT_DATASET_PATH
 
 
 def _load_dataset() -> list[dict]:

@@ -17,6 +17,7 @@ of the attempt, not discovered in the report.
 """
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,14 +29,47 @@ from agent.events import (
     Attachment,
     Direction,
     EmailEvent,
+    EventValidationError,
+    FeedbackKind,
     Message,
     SenderIdentity,
     Thread,
     validate_stream,
 )
+from agent.safety.floor import Route
+from agent.tools.email_tools import ACTION_TO_TOOL
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATASET_PATH = REPO_ROOT / "docs" / "wajo_dataset.jsonl"
+DEFAULT_DATASET_PATH = REPO_ROOT / "datasets" / "wajo_cases.jsonl"
+
+SCHEMA_VERSION = "wajo_dataset_v1"
+
+# The sizes the case set has to reach: below this the ask-rate curve is noise and the
+# held-out accuracy is one lucky case. Checked rather than assumed, so a truncated file
+# fails at validation instead of quietly reporting a confident number.
+MIN_LEARNING_CASES = 30
+MIN_SEALED_CASES = 10
+
+# The generator fills a body in later for rows it only sketched. Such a row still carries
+# a gold route, so it scores, but triage sees no text: worth saying out loud, not a failure.
+_PLACEHOLDER_BODY = re.compile(r"detailed email body according to scenario", re.IGNORECASE)
+_REPLY_PREFIX = re.compile(r"^\s*(?:re|fwd)\s*:\s*", re.IGNORECASE)
+
+# What every case has to carry for the pipeline to run it and for the report to score it.
+_CASE_FIELDS = (
+    "schema_version",
+    "case_id",
+    "split",
+    "sequence_index",
+    "timestamp",
+    "canonical_candidate_action.action_id",
+    "gold.autonomy_outcome",
+    "incoming_email.sender.email",
+    "incoming_email.subject",
+    "thread.thread_id",
+    "observed_user_feedback.kind",
+    "safety_floor.autonomy_ceiling",
+)
 
 
 class Lane(StrEnum):
@@ -434,16 +468,328 @@ class LaneView:
             )
 
 
+@dataclass(frozen=True)
+class DatasetProblem:
+    """One thing the case set gets wrong, named so it can be found and fixed."""
+
+    code: str
+    case_id: str
+    detail: str
+
+    def describe(self) -> str:
+        return f"{self.code:<18} {self.case_id:<12} {self.detail}"
+
+
+@dataclass(frozen=True)
+class CaseReport:
+    """What the case set holds and whatever is wrong with it.
+
+    ``ok`` is about problems only: a warning is something a reader should know and a
+    run may proceed past, an empty case set or a scenario in two lanes is not.
+    """
+
+    source: str
+    digest: str
+    split_counts: Mapping[str, int]
+    lane_counts: Mapping[str, int]
+    problems: tuple[DatasetProblem, ...] = ()
+    warnings: tuple[DatasetProblem, ...] = ()
+
+    @property
+    def total(self) -> int:
+        return sum(self.split_counts.values())
+
+    @property
+    def learning(self) -> int:
+        return self.lane_counts.get(Lane.CALIBRATION.value, 0)
+
+    @property
+    def sealed(self) -> int:
+        return self.lane_counts.get(Lane.HELD_OUT.value, 0)
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+    def render(self) -> str:
+        """The report as a reader sees it: counts first, then what fails."""
+        lines = [f"case set: {self.source}", f"digest: {self.digest[:16]}"]
+        for split in SPLIT_TO_LANE:
+            count = self.split_counts.get(split, 0)
+            lines.append(f"  {split:<20} {count:>4}  lane {SPLIT_TO_LANE[split].value}")
+        lines.append(
+            f"learning {self.learning}  sealed {self.sealed}"
+            f"  development {self.lane_counts.get(Lane.DEVELOPMENT.value, 0)}"
+            f"  total {self.total}"
+        )
+        for problem in self.problems:
+            lines.append(f"problem: {problem.describe()}")
+        # A warning repeats: one line per code, with the cases that carry it, keeps a
+        # placeholder body in a quarter of the file from burying the counts it sits under.
+        for code in dict.fromkeys(warning.code for warning in self.warnings):
+            named = [warning for warning in self.warnings if warning.code == code]
+            shown = ", ".join(warning.case_id for warning in named[:6])
+            more = f" and {len(named) - 6} more" if len(named) > 6 else ""
+            lines.append(f"warning: {code} on {len(named)} case(s): {shown}{more}")
+            lines.append(f"         {named[0].detail}")
+        if self.ok:
+            lines.append("ok: counts, enums and splits hold")
+        else:
+            lines.append(f"failed: {len(self.problems)} problem(s) in the case set")
+        return "\n".join(lines)
+
+
+def _value(row: Mapping[str, Any], path: str, default: Any = None) -> Any:
+    """Read a dotted path out of a row, or the default when any step is absent."""
+    found: Any = row
+    for step in path.split("."):
+        if not isinstance(found, Mapping) or step not in found:
+            return default
+        found = found[step]
+    return found
+
+
+def _scenario(row: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The scenario a rule would be scoped to: who sent it, and about what.
+
+    Sender plus subject is the narrowest scope a learned preference can cover, which
+    makes it exactly the key that must not repeat across the learning and the sealed
+    lane: a held-out case the learner was already taught is not held out at all.
+    """
+    sender = str(_value(row, "incoming_email.sender.email", "")).strip().lower()
+    subject = str(_value(row, "incoming_email.subject", "")).strip().lower()
+    subject = _REPLY_PREFIX.sub("", subject)
+    subject = " ".join(subject.split())
+    if not sender or not subject:
+        return None
+    return (sender, subject)
+
+
+def _row_problems(row: Mapping[str, Any], number: int) -> tuple[list[DatasetProblem], list[DatasetProblem]]:
+    """Check one row's fields and enums. Returns its problems and its warnings."""
+    case_id = str(row.get("case_id") or f"line {number}")
+    problems: list[DatasetProblem] = []
+    warnings: list[DatasetProblem] = []
+
+    for path in _CASE_FIELDS:
+        if _value(row, path) in (None, ""):
+            problems.append(DatasetProblem("MISSING_FIELD", case_id, f"no {path}"))
+
+    version = _value(row, "schema_version")
+    if version is not None and version != SCHEMA_VERSION:
+        problems.append(
+            DatasetProblem(
+                "SCHEMA_VERSION",
+                case_id,
+                f"{version!r} is not the {SCHEMA_VERSION!r} the loader reads",
+            )
+        )
+
+    split = _value(row, "split")
+    if split is not None and split not in SPLIT_TO_LANE:
+        problems.append(
+            DatasetProblem(
+                "UNKNOWN_SPLIT", case_id, f"{split!r} is not one of {', '.join(SPLIT_TO_LANE)}"
+            )
+        )
+
+    outcome = _value(row, "gold.autonomy_outcome")
+    if outcome is not None and outcome not in {route.value for route in Route}:
+        problems.append(DatasetProblem("UNKNOWN_ROUTE", case_id, f"{outcome!r} is not a route"))
+
+    ceiling = _value(row, "safety_floor.autonomy_ceiling")
+    if ceiling is not None and ceiling not in {route.value for route in Route}:
+        problems.append(DatasetProblem("UNKNOWN_CEILING", case_id, f"{ceiling!r} is not a route"))
+
+    kind = _value(row, "observed_user_feedback.kind")
+    if kind is not None:
+        try:
+            FeedbackKind(str(kind))
+        except ValueError:
+            problems.append(
+                DatasetProblem("UNKNOWN_FEEDBACK", case_id, f"{kind!r} is not a feedback kind")
+            )
+
+    action_id = _value(row, "canonical_candidate_action.action_id")
+    if action_id is not None and action_id not in ACTION_TO_TOOL and outcome != Route.ESCALATE.value:
+        problems.append(
+            DatasetProblem(
+                "UNKNOWN_ACTION",
+                case_id,
+                f"nothing implements {action_id!r}, so its gold route can only be ESCALATE, not {outcome!r}",
+            )
+        )
+
+    sealed = split in SPLIT_TO_LANE and SPLIT_TO_LANE[split] is Lane.HELD_OUT
+    if sealed and _value(row, "observed_user_feedback.explicit_for_learning"):
+        problems.append(
+            DatasetProblem(
+                "SEALED_FEEDBACK",
+                case_id,
+                "a sealed case carries explicit learning feedback, which would teach on the held-out run",
+            )
+        )
+
+    body = str(_value(row, "incoming_email.body", ""))
+    if not body.strip() or _PLACEHOLDER_BODY.search(body):
+        warnings.append(
+            DatasetProblem(
+                "PLACEHOLDER_BODY",
+                case_id,
+                "the body is the generator's placeholder, so the row cannot exercise triage",
+            )
+        )
+    return problems, warnings
+
+
+def validate_cases(path: Path | str = DEFAULT_DATASET_PATH) -> CaseReport:
+    """Check a case set's counts, enums and splits before anything is asked to run it.
+
+    Reports every problem it finds rather than the first, because a case set is edited
+    in one sitting and a reader wants the whole list. The manifest is built at the end
+    as a backstop: whatever the field checks do not reach, the loader does.
+    """
+    dataset_path = Path(path)
+    try:
+        payload = dataset_path.read_bytes()
+    except OSError as error:
+        raise ManifestError(f"cannot read dataset {dataset_path}: {error}") from error
+
+    rows: list[Mapping[str, Any]] = []
+    problems: list[DatasetProblem] = []
+    warnings: list[DatasetProblem] = []
+    for number, line in enumerate(payload.decode("utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as error:
+            problems.append(DatasetProblem("NOT_JSON", f"line {number}", str(error)))
+            continue
+        if not isinstance(row, Mapping):
+            problems.append(
+                DatasetProblem("ROW_SHAPE", f"line {number}", "a case has to be a JSON object")
+            )
+            continue
+        found, noted = _row_problems(row, number)
+        problems.extend(found)
+        warnings.extend(noted)
+        rows.append(row)
+
+    split_counts: dict[str, int] = {}
+    lane_counts: dict[str, int] = {}
+    for row in rows:
+        split = str(_value(row, "split"))
+        split_counts[split] = split_counts.get(split, 0) + 1
+        lane = SPLIT_TO_LANE.get(split)
+        if lane is not None:
+            lane_counts[lane.value] = lane_counts.get(lane.value, 0) + 1
+
+    problems.extend(_split_problems(rows))
+    learning = lane_counts.get(Lane.CALIBRATION.value, 0)
+    sealed = lane_counts.get(Lane.HELD_OUT.value, 0)
+    for count, floor, lane in (
+        (learning, MIN_LEARNING_CASES, Lane.CALIBRATION),
+        (sealed, MIN_SEALED_CASES, Lane.HELD_OUT),
+    ):
+        if count < floor:
+            problems.append(
+                DatasetProblem(
+                    "TOO_FEW_CASES",
+                    lane.value,
+                    f"{count} case(s) in this lane; the case set needs at least {floor}",
+                )
+            )
+
+    digest = hashlib.sha256(payload).hexdigest()
+    try:
+        Manifest.from_rows(rows, source=str(dataset_path), dataset_digest=digest)
+    except (ManifestError, EventValidationError) as error:
+        problems.append(DatasetProblem("LOAD", "<file>", str(error)))
+
+    return CaseReport(
+        source=str(dataset_path),
+        digest=digest,
+        split_counts=split_counts,
+        lane_counts=lane_counts,
+        problems=tuple(problems),
+        warnings=tuple(warnings),
+    )
+
+
+def _split_problems(rows: Sequence[Mapping[str, Any]]) -> list[DatasetProblem]:
+    """The cross-row checks: ids and ordering, and nothing landing in two lanes."""
+    problems: list[DatasetProblem] = []
+    seen_ids: set[str] = set()
+    seen_order: dict[int, str] = {}
+    scenarios: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    threads: dict[str, list[tuple[str, str]]] = {}
+
+    for row in rows:
+        case_id = str(_value(row, "case_id", "<row without a case_id>"))
+        split = str(_value(row, "split", ""))
+        if case_id in seen_ids:
+            problems.append(DatasetProblem("DUPLICATE_CASE_ID", case_id, "appears twice"))
+        seen_ids.add(case_id)
+
+        index = _value(row, "sequence_index")
+        if isinstance(index, int):
+            first = seen_order.get(index)
+            if first is not None:
+                problems.append(
+                    DatasetProblem(
+                        "DUPLICATE_SEQUENCE", case_id, f"sequence_index {index} is also {first}'s"
+                    )
+                )
+            seen_order[index] = case_id
+
+        scenario = _scenario(row)
+        if scenario is not None:
+            scenarios.setdefault(scenario, []).append((case_id, split))
+        thread_id = str(_value(row, "thread.thread_id", ""))
+        if thread_id:
+            threads.setdefault(thread_id, []).append((case_id, split))
+
+    for found, label in ((scenarios, "scenario"), (threads, "thread")):
+        for key, holders in found.items():
+            splits = {split for _, split in holders}
+            if len(splits) < 2:
+                continue
+            # The case named is the one that crossed: a leak is reported against the row
+            # in the wrong lane, not against whichever lane happened to come first.
+            intruder, intruder_split = next(
+                (case_id, split) for case_id, split in holders if split != holders[0][1]
+            )
+            others = "; ".join(
+                f"{split} as {case_id}" for case_id, split in holders if split != intruder_split
+            )
+            name = key if label == "thread" else f"{key[0]} / {key[1]}"
+            problems.append(
+                DatasetProblem(
+                    "SPLIT_LEAK",
+                    intruder,
+                    f"{label} {name!r} is also {others} ({intruder_split} against those)",
+                )
+            )
+    return problems
+
+
 __all__ = [
     "DEFAULT_DATASET_PATH",
     "LEARNABLE_LANES",
+    "MIN_LEARNING_CASES",
+    "MIN_SEALED_CASES",
+    "SCHEMA_VERSION",
     "SPLIT_TO_LANE",
     "Case",
     "CaseLabels",
+    "CaseReport",
+    "DatasetProblem",
     "Lane",
     "LaneView",
     "Manifest",
     "ManifestError",
     "SplitViolation",
     "event_from_row",
+    "validate_cases",
 ]

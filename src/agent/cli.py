@@ -22,6 +22,7 @@ from agent.dataset import (
     Manifest,
     ManifestError,
     SplitViolation,
+    validate_cases,
 )
 from agent.gateway import (
     ENDPOINTS,
@@ -122,6 +123,22 @@ def build_parser() -> argparse.ArgumentParser:
             "what it committed (nothing is approved without this flag)"
         ),
     )
+
+    data = commands.add_parser("data", help="the case set: what it holds and whether it holds together")
+    data_commands = data.add_subparsers(dest="data_command", required=True)
+    validate = data_commands.add_parser(
+        "validate",
+        help=(
+            "check the case set's counts, enums and splits: no scenario in two lanes, "
+            "no sealed case carrying feedback"
+        ),
+    )
+    validate.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_DATASET_PATH),
+        help="JSONL case set to check (default: the committed case set)",
+    )
     return parser
 
 
@@ -206,6 +223,13 @@ def _open_store(args: argparse.Namespace) -> ClaimStore:
 def _proposing(provider: ProposalProvider, store: ClaimStore) -> ProposalGateway:
     """The pipeline's proposer: a rule already confirmed answers before the provider does."""
     return ProposalGateway(RememberedProvider(store, provider))
+
+
+def data_validate(args: argparse.Namespace, out: IO[str]) -> int:
+    """Print what a case set holds and everything wrong with it."""
+    report = validate_cases(args.path)
+    out.write(report.render() + "\n")
+    return 0 if report.ok else 1
 
 
 def _policy(
@@ -449,6 +473,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     args = build_parser().parse_args(argv)
     out = sys.stdout
+    if (args.command, getattr(args, "data_command", None)) == ("data", "validate"):
+        try:
+            return data_validate(args, out)
+        except (ManifestError, OSError) as error:
+            out.write(f"cannot validate: {error}\n")
+            return 2
     if (args.command, getattr(args, "graph_command", None)) == ("graph", "run"):
         try:
             return graph_run(args, out)

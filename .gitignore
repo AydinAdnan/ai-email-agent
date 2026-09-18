@@ -27,7 +27,8 @@ Thumbs.db
 traces/
 preferences.jsonl
 
-# The plan, the papers and the dataset stay local. routes.md is part of the build, so the
+# The plan, the papers and the raw generated dataset stay local; the validated case set
+# is committed at datasets/wajo_cases.jsonl. routes.md is part of the build, so the
 # directory is ignored entry by entry rather than wholesale.
 docs/*
 !docs/routes.md
