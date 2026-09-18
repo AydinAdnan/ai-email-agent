@@ -23,9 +23,11 @@ wheels/
 .DS_Store
 Thumbs.db
 
-# Local run artifacts (wajo sim run --trace, and --store rules)
+# Local run artifacts (wajo sim run --trace, and --store rules), and the eval run's
+# report, frozen learner and rules - one command reproduces all three
 traces/
 preferences.jsonl
+artifacts/
 
 # The plan, the papers and the raw generated dataset stay local; the validated case set
 # is committed at datasets/wajo_cases.jsonl. routes.md is part of the build, so the

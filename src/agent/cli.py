@@ -33,11 +33,16 @@ from agent.gateway import (
 )
 from agent.graph import GraphError, GraphSession
 from agent.loop import run_loop
-from agent.memory.claims import ClaimStore
+from agent.memory.claims import ClaimError, ClaimStore
 from agent.memory.consent import Capability, Grant, session_grant
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
 from agent.trace import TraceError, TraceSink
+from evals.harness import BLOCK, ScoringError
+from evals.run_eval import DEFAULT_OUT as DEFAULT_EVAL_OUT
+from evals.run_eval import DEFAULT_SCRIPT as DEFAULT_EVAL_SCRIPT
+from evals.run_eval import render as render_eval
+from evals.run_eval import run_eval
 
 # The lanes a human may sit in front of. Held-out cases are sealed: reading them
 # here would spend the only unbiased measurement Phase 8 has.
@@ -122,6 +127,45 @@ def build_parser() -> argparse.ArgumentParser:
             "after the run, answer that arrival's held decision with a yes and report "
             "what it committed (nothing is approved without this flag)"
         ),
+    )
+
+    evaluation = commands.add_parser(
+        "eval", help="the two-lane evaluation: learn, freeze, then score the sealed lane once"
+    )
+    eval_commands = evaluation.add_subparsers(dest="eval_command", required=True)
+    everything = eval_commands.add_parser(
+        "all",
+        help=(
+            "teach the calibration lane with a scripted transcript, freeze the learner, then "
+            "run the sealed lane once and write the report"
+        ),
+    )
+    everything.add_argument(
+        "--fixture", default=str(DEFAULT_DATASET_PATH), help="JSONL case set to evaluate"
+    )
+    everything.add_argument(
+        "--script",
+        default=str(DEFAULT_EVAL_SCRIPT),
+        help="the teaching transcript: which decision gets which lines",
+    )
+    everything.add_argument(
+        "--out",
+        default=str(DEFAULT_EVAL_OUT),
+        help="where report.json, learner.json and rules.jsonl are written",
+    )
+    everything.add_argument("--seed", type=int, default=7, help="seed for both lane runs")
+    everything.add_argument(
+        "--block", type=int, default=BLOCK, help="cases per block in the interruption curve"
+    )
+    everything.add_argument(
+        "--provider",
+        choices=["rules", *ENDPOINTS],
+        default="rules",
+        help="who proposes during the calibration: the offline rules, or a model endpoint",
+    )
+    everything.add_argument("--model", help="model id to use; falls back to WAJO_MODEL")
+    everything.add_argument(
+        "--trace", metavar="PATH", help="append both lanes' decisions to a JSONL trace"
     )
 
     data = commands.add_parser("data", help="the case set: what it holds and whether it holds together")
@@ -230,6 +274,37 @@ def data_validate(args: argparse.Namespace, out: IO[str]) -> int:
     report = validate_cases(args.path)
     out.write(report.render() + "\n")
     return 0 if report.ok else 1
+
+
+def eval_all(args: argparse.Namespace, out: IO[str]) -> int:
+    """Teach the calibration lane, freeze it, and score the sealed lane once."""
+    manifest = Manifest.load(args.fixture)
+    provider = build_provider(args.provider, model=args.model)
+    label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
+    sink = TraceSink(args.trace) if args.trace else None
+    try:
+        outcome = run_eval(
+            manifest.view(Lane.CALIBRATION),
+            manifest.view(Lane.HELD_OUT),
+            script_path=args.script,
+            seed=args.seed,
+            provider=provider,
+            out=args.out,
+            block=args.block,
+            trace=sink,
+        )
+    finally:
+        if sink is not None:
+            sink.close()
+    out.write(
+        f"fixture: {manifest.source}\n"
+        f"digest: {manifest.dataset_digest[:16]}\n"
+        f"proposal source: the {label} proposal\n"
+        f"{render_eval(outcome)}\n"
+    )
+    if sink is not None:
+        out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
+    return 0 if outcome.held_out.gates_ok else 1
 
 
 def _policy(
@@ -473,6 +548,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     args = build_parser().parse_args(argv)
     out = sys.stdout
+    if (args.command, getattr(args, "eval_command", None)) == ("eval", "all"):
+        try:
+            return eval_all(args, out)
+        except KeyboardInterrupt:
+            out.write("\nstopped before the evaluation finished\n")
+            return 130
+        except (
+            ProposalError,
+            ManifestError,
+            SplitViolation,
+            TraceError,
+            ClaimError,
+            ScoringError,
+            OSError,
+        ) as error:
+            # Foreseeable operational failures get one readable line, not a traceback.
+            out.write(f"cannot evaluate: {error}\n")
+            return 2
     if (args.command, getattr(args, "data_command", None)) == ("data", "validate"):
         try:
             return data_validate(args, out)

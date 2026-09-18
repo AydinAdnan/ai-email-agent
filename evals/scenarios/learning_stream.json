@@ -1,0 +1,67 @@
+{
+  "name": "learning stream, taught as it arrives",
+  "description": "The learning lane answered the way a user would answer it. Three clarifications do the teaching the plan names - a recurring broadcast the user wants filed quietly, a class of mail the user wants handled one way, and a sender the user corrects - and the rest are plain approvals of work the agent prepared. Every line is typed at the decision it answers, so the rule is scoped to the mail that was on screen.",
+  "replies": [
+    {
+      "case": "WAJO-0008",
+      "teaches": "release the recruiter draft the agent wrote",
+      "lines": ["yes"]
+    },
+    {
+      "case": "WAJO-0012",
+      "teaches": "a recurring broadcast: file it quietly from now on",
+      "lines": [
+        "always archive these weekly standup notes from david.chen@techcorp.synthetic.example silently",
+        "yes"
+      ]
+    },
+    {
+      "case": "WAJO-0004",
+      "teaches": "approve the catch-up draft",
+      "lines": ["yes"]
+    },
+    {
+      "case": "WAJO-0033",
+      "teaches": "a class clarification: recruiters get a draft, never an auto-send",
+      "lines": ["always prepare a draft and ask me first for recruiter follow-ups", "yes"]
+    },
+    {
+      "case": "WAJO-0018",
+      "teaches": "approve the migration sync draft",
+      "lines": ["yes"]
+    },
+    {
+      "case": "WAJO-0023",
+      "teaches": "a sender correction: an outside analyst asking for our documents",
+      "lines": [
+        "actually vstone@external-analyst.synthetic.example is an outside analyst - escalate anything he asks for",
+        "yes"
+      ]
+    },
+    {
+      "case": "WAJO-0037",
+      "teaches": "approve the config reply",
+      "lines": ["yes"]
+    },
+    {
+      "case": "WAJO-0044",
+      "teaches": "approve the priority decision",
+      "lines": ["yes"]
+    },
+    {
+      "case": "WAJO-0038",
+      "teaches": "approve the second catch-up",
+      "lines": ["yes"]
+    },
+    {
+      "case": "WAJO-0026",
+      "teaches": "approve the status reply",
+      "lines": ["yes"]
+    },
+    {
+      "case": "WAJO-0049",
+      "teaches": "approve the architecture review draft",
+      "lines": ["yes"]
+    }
+  ]
+}

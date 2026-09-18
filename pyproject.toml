@@ -31,7 +31,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent"]
+# The eval tooling is a package beside the source tree rather than inside it, and the
+# `wajo eval` command imports it, so the console script needs it installed too.
+packages = ["src/agent", "evals"]
 
 [tool.pytest.ini_options]
 # `agent` lives under src/, and the editable install is not guaranteed in every

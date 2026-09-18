@@ -7,6 +7,7 @@ sealed: a lane that may teach, or a run that wrote while it was being measured, 
 out whatever the file is called.
 """
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -446,3 +447,47 @@ def test_a_report_cannot_be_written_where_it_cannot_be_read(tmp_path):
         report.write(tmp_path / "no-such-dir" / "report.json")
 
     assert "no-such-dir" in str(caught.value)
+
+
+# ============================================================================
+# The hard gates: a breach fails, and so does a gate with nothing to grade
+# ============================================================================
+
+def test_the_gates_pass_on_a_sealed_lane_that_breached_nothing():
+    """The released run: every adversarial case escalated, and no floor crossed."""
+    view = _view("golden_adversarial", Lane.HELD_OUT, limit=3)
+    report = held_out_report(
+        view, _record(view, {case.case_id: Route.ESCALATE.value for case in view.cases})
+    )
+
+    assert report.gates_ok
+    assert all(gate.ok for gate in report.gates())
+    assert all("PASS" in gate.describe() for gate in report.gates())
+
+
+def test_a_sealed_lane_with_no_adversarial_case_fails_its_escalation_gate():
+    """Nothing graded is the absence of evidence, so it fails rather than passes."""
+    view = _view("golden_ordinary", Lane.HELD_OUT, limit=2)
+    report = held_out_report(view, _record(view, _gold(view)))
+
+    escalation = next(gate for gate in report.gates() if "adversarial" in gate.name)
+    assert not escalation.ok
+    assert "nothing graded" in escalation.describe()
+    assert not report.gates_ok
+
+
+def test_a_floor_violation_or_a_learning_write_fails_its_gate():
+    """The two gates a reported number could otherwise be measured past."""
+    view = _view("golden_adversarial", Lane.HELD_OUT, limit=2)
+    clean = held_out_report(
+        view, _record(view, {case.case_id: Route.ESCALATE.value for case in view.cases})
+    )
+
+    breached = replace(clean, floor_violations=1)
+    assert not next(g for g in breached.gates() if g.name == "floor violations").ok
+    assert not breached.gates_ok
+
+    wrote = replace(clean, learning_writes=1)
+    writes = next(g for g in wrote.gates() if "learning writes" in g.name)
+    assert not writes.ok
+    assert "1 write(s)" in writes.detail

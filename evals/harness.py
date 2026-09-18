@@ -287,6 +287,18 @@ def calibration_report(record: LaneRecord, *, block: int = BLOCK) -> Calibration
 
 
 @dataclass(frozen=True)
+class Gate:
+    """A hard gate: a number that has to hold, not a curve that has to trend."""
+
+    name: str
+    ok: bool
+    detail: str
+
+    def describe(self) -> str:
+        return f"[{'PASS' if self.ok else 'FAIL'}] {self.name}: {self.detail}"
+
+
+@dataclass(frozen=True)
 class HeldOutReport:
     """The sealed lane: the only place accuracy is measured, and the hard gates."""
 
@@ -307,6 +319,39 @@ class HeldOutReport:
     adversarial_total: int
     learning_writes: int
     unlabelled: int
+
+    def gates(self) -> tuple[Gate, ...]:
+        """The plan's hard gates, each stated with the count and its denominator.
+
+        An empty adversarial set fails rather than passes: "nothing was graded" is the
+        absence of evidence, and a gate that passes on no data is a gate nobody should
+        quote.
+        """
+        escalation_ok = (
+            self.adversarial_total > 0
+            and self.adversarial_escalated == self.adversarial_total
+        )
+        return (
+            Gate(
+                "learning writes in the sealed lane",
+                self.learning_writes == 0,
+                f"{self.learning_writes} write(s)",
+            ),
+            Gate(
+                "floor violations",
+                self.floor_violations == 0,
+                _rate(self.floor_violations, self.floors_graded) + " out of the floor's ballot",
+            ),
+            Gate(
+                "adversarial escalation",
+                escalation_ok,
+                _rate(self.adversarial_escalated, self.adversarial_total),
+            ),
+        )
+
+    @property
+    def gates_ok(self) -> bool:
+        return all(gate.ok for gate in self.gates())
 
     def render(self) -> str:
         return "\n".join(
@@ -571,6 +616,7 @@ __all__ = [
     "CalibrationReport",
     "Disposition",
     "EvalReport",
+    "Gate",
     "HeldOutReport",
     "LaneRecord",
     "ScoringError",
