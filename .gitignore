@@ -27,4 +27,7 @@ Thumbs.db
 traces/
 preferences.jsonl
 
-docs
+# The plan, the papers and the dataset stay local. routes.md is part of the build, so the
+# directory is ignored entry by entry rather than wholesale.
+docs/*
+!docs/routes.md
