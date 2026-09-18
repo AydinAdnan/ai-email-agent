@@ -124,6 +124,37 @@ question is cheap: `ASK_FIRST_WITH_PREDRAFT` at 0.5 against 2.7 for notify, 4.0 
 and 0.7 for a handoff. The router asks, with the question bounded: *the full amount, or the
 partial one they mentioned?*
 
+## What an ask carries
+
+`ASK_FIRST_WITH_PREDRAFT` is a promise about the *effort* of answering, so the question
+arrives with the reply already written. `src/agent/drafts.py` does that in three steps.
+
+**Retrieval.** A few consented sent examples, ranked same person first, then same intent,
+then the rest, and capped twice: by `max_style_examples` from the case's budget, and by a
+token budget. An example that does not fit is left out whole rather than truncated. The
+learned style is cited: the salutation the draft opens with is the one the best example
+opens with.
+
+**The draft.** Written from what the mail and its thread actually say: the subject, the
+sender, the questions asked. It quotes each question back and marks it `[needs your
+answer: question N]` in the body, because the answers are the user's — a draft that invents
+a date is the failure this route exists to prevent. Fact sources and unresolved gaps are
+listed with it, and `no_send` is fixed: an ask saves a draft, it never sends.
+
+**The checks, before it is shown.** Fixed order, first refusal is the answer:
+
+| Code | What it refuses |
+| --- | --- |
+| `WRONG_RECIPIENT` | A reply addressed to anyone but whoever wrote |
+| `MASK_LEFTOVER` | A `<TYPE_N>` masking token left in text a human would approve |
+| `UNSOURCED_DATE` | A date that appears nowhere in the mail or its thread |
+| `UNSOURCED_AMOUNT` | An amount that appears nowhere in the mail or its thread |
+
+A draft that fails any of these is not shown, and the arrival is **escalated** instead: a
+reply the user cannot trust is worse than a mail handed back. The floor judged the action
+as proposed, without the draft's text, so a quoting draft cannot change the action's class
+and escalate the very mail it was written to answer.
+
 ## The order the router applies
 
 Fixed, and each step can only narrow what is left:
