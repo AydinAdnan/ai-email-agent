@@ -127,6 +127,10 @@ async def run_loop(
     # One router for both passes: what the calibration earns is what the autonomous pass
     # then spends, which is the whole point of running them in that order.
     router = Router(learner)
+    # One memory for both passes as well. A rule takes effect from the next arrival - the
+    # plan's own wording for the scope echo - so the chat pass consults the claims it is
+    # confirming rather than asking again for what the user just answered.
+    remembered = RememberedProvider(store, inner)
 
     calibration = await run_simulation(
         view,
@@ -134,7 +138,7 @@ async def run_loop(
         out=out,
         input_queue=queue,
         on_interrupt=replies.hook(queue),
-        policy=ProposalPolicy(ProposalGateway(inner)),
+        policy=ProposalPolicy(ProposalGateway(remembered)),
         store=store,
         learner=learner,
         router=router,
@@ -142,7 +146,6 @@ async def run_loop(
         trace=trace,
     )
 
-    remembered = RememberedProvider(store, inner)
     session = GraphSession(
         view,
         seed=seed,

@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from agent.events import Message
-from agent.gateway import NO_ACTION_TOOL, Proposal, ProposalProvider, ProposalRequest
+from agent.gateway import (
+    NO_ACTION_TOOL,
+    Proposal,
+    ProposalError,
+    ProposalProvider,
+    ProposalRequest,
+    parse_proposal,
+)
 from agent.memory.claims import Claim, ClaimStore
 from agent.safety.floor import Route
 from agent.tools.email_tools import tool_for_action
@@ -47,6 +55,12 @@ class RememberedProvider:
         recalled = self.proposal_for(request.message, request.hints)
         if recalled is None:
             return await self.inner.complete(request)
+        if recalled.action_id is None and recalled.route is not Route.ESCALATE:
+            # The rule says how much autonomy, not what the work is: the inner provider
+            # still chooses the work and the claim decides who is asked about it. Without
+            # this a rule that names only silence arrives at the floor as an unrecognized
+            # tool, which escalates the very mail the user asked to stop hearing about.
+            recalled = _with_inner_action(recalled, await self.inner.complete(request))
         self.answered.add(request.message.message_id)
         return json.dumps(
             {
@@ -69,6 +83,28 @@ class RememberedProvider:
             if proposal is not None:
                 return proposal
         return None
+
+
+def _with_inner_action(recalled: Proposal, answer: str) -> Proposal:
+    """The claim's route, with whatever work the inner provider chose for the mail.
+
+    An answer that cannot be parsed, or one that names no action either, leaves the claim
+    as it was: the floor then handles the actionless proposal the way it always has, which
+    is to refuse it rather than to guess.
+    """
+    try:
+        inner = parse_proposal(answer, provider="inner")
+    except ProposalError:
+        return recalled
+    if inner.action_id is None:
+        return recalled
+    return replace(
+        recalled,
+        action_id=inner.action_id,
+        tool_name=inner.tool_name,
+        params=dict(inner.params),
+        confidence=max(recalled.confidence, inner.confidence),
+    )
 
 
 def proposal_from(claim: Claim) -> Proposal | None:

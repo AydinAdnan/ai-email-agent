@@ -333,7 +333,11 @@ def _action_for(
     if _ESCALATE.search(quote):
         return Route.ESCALATE, None, {}, None
     if _ASK.search(quote):
-        return Route.ASK_FIRST_WITH_PREDRAFT, action_id, {}, None
+        # Asking first means a draft to ask about - that is the route's own name, and what
+        # its echo already promises - so a reading that names no action still names the work.
+        # A claim left actionless arrives at the floor as an unrecognized tool, which
+        # escalates the very mail the user asked to see drafted.
+        return Route.ASK_FIRST_WITH_PREDRAFT, action_id or "email.create_draft", {}, None
     if _SILENCE.search(quote) or ignored:
         return Route.PROCEED_SILENTLY, action_id, {}, None
     if _NOTIFY.search(quote):
