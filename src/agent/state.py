@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from agent.events import Message
 from agent.safety.floor import SafetyVerdict
 from agent.tools.registry import PreparedAction, Receipt
 from agent.triage import Triage
+
+if TYPE_CHECKING:
+    # Only a type: the router reads state's schema, so importing it back at runtime would
+    # close a loop between the two.
+    from agent.autonomy.router import Routing
 
 STATE_SCHEMA_VERSION = "1"
 
@@ -32,6 +37,9 @@ class GraphState(TypedDict, total=False):
     hints: dict[str, Any]
     proposal: dict[str, Any]
     floor: dict[str, Any]
+    # What the router considered: the ballot, the posteriors, and the cost of every
+    # alternative it scored, so a route can be read back rather than re-derived.
+    routing: dict[str, Any]
     pii: dict[str, Any]
     route: str
     action_id: str
@@ -87,6 +95,37 @@ def verdict_fields(verdict: SafetyVerdict) -> dict[str, Any]:
         "action_class": _plain(verdict.action_class),
         "allowed_routes": [_plain(route) for route in verdict.allowed_routes],
         "reason": verdict.reason,
+    }
+
+
+def routing_fields(routing: Routing | None) -> dict[str, Any]:
+    """The router's decision, as traceable fields: bounded, scalar, and re-readable."""
+    if routing is None:
+        return {}
+    return {
+        "route": _plain(routing.route),
+        "value": round(routing.value, 4),
+        "allowed": [_plain(route) for route in routing.allowed],
+        "eligible": [_plain(route) for route in routing.eligible],
+        "basis": routing.basis,
+        "named": _plain(routing.named) if routing.named is not None else "",
+        "refused_by": routing.refused_by,
+        "posterior": {
+            "mean": round(routing.posterior.mean, 4),
+            "alpha": routing.posterior.alpha,
+            "beta": routing.posterior.beta,
+            "level": routing.posterior.level,
+        },
+        # Flat and shallow on purpose: a sink digests a value more than four levels deep,
+        # and a receipt nobody can read is not a receipt.
+        "alternatives": [
+            {
+                "route": _plain(loss.route),
+                "value": round(loss.value, 4),
+                "terms": [f"{outcome} {p:.2f}x{cost:g}" for outcome, p, cost in loss.terms],
+            }
+            for loss in routing.alternatives
+        ],
     }
 
 

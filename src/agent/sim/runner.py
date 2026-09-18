@@ -39,6 +39,7 @@ from typing import IO, Any
 
 from agent.autonomy.bandit import Learner
 from agent.autonomy.confidence import Bucket
+from agent.autonomy.router import Router
 from agent.dataset import Case, LaneView
 from agent.events import FeedbackEvent, FeedbackKind, SenderIdentity, is_learnable
 from agent.gateway import NO_ACTION_TOOL
@@ -67,6 +68,7 @@ from agent.state import (
     message_digest,
     prepared_fields,
     receipt_fields,
+    routing_fields,
     verdict_fields,
 )
 from agent.tools.email_tools import SimulatedMailbox, build_registry
@@ -159,6 +161,7 @@ class ChatRunner:
         registry: ToolRegistry | None = None,
         store: ClaimStore | None = None,
         learner: Learner | None = None,
+        router: Router | None = None,
         window: int = WINDOW_SIZE,
         trace: TraceSink | None = None,
     ) -> None:
@@ -177,6 +180,9 @@ class ChatRunner:
         self.outcome = SimOutcome()
         # The posteriors this session moves. A run that keeps nothing has no learner at all.
         self.learner = learner
+        # The router reads those posteriors and the refusals beside them; a run given no
+        # router routes with a cold one, which is the persona's own rules and no more.
+        self.router = router if router is not None else Router(learner)
         self.closed = False
         self.last_decision: Decision | None = None
         self.input_error: str | None = None
@@ -235,7 +241,7 @@ class ChatRunner:
 
     async def _decide(self, case: Case, *, delivered: int) -> Decision:
         try:
-            decision = await self.policy.decide(case)
+            decision = await self.policy.decide(case, router=self.router)
         except Exception as error:
             # A traceback that does not name the case is a bug hunt, not a bug report.
             raise SimError(
@@ -322,6 +328,7 @@ class ChatRunner:
                 "reason": decision.reason,
             },
             "floor": verdict_fields(decision.verdict),
+            "routing": routing_fields(decision.routing),
             "route": decision.route.value,
             "action_id": decision.action_id,
             "prepared": prepared_fields(self.last_prepared),
@@ -515,7 +522,11 @@ class ChatRunner:
         self.outcome.feedback.append(event)
         target = decision if decision is not None else self.last_decision
         if self.learner is not None and target is not None:
-            self.learner.observe(event, _bucket_of(target), claim=claim)
+            bucket = _bucket_of(target)
+            # The cutoffs move on the same reading the posterior does, and only when the
+            # learner actually counted it: a replayed event teaches neither one twice.
+            if self.learner.observe(event, bucket, claim=claim):
+                self.router.observe(event, bucket)
 
     async def pump(self, source: AsyncIterator[str]) -> None:
         """Hand typed lines to the chat, and always close the queue when the read ends.
@@ -755,6 +766,7 @@ async def run_simulation(
     trace: TraceSink | None = None,
     store: ClaimStore | None = None,
     learner: Learner | None = None,
+    router: Router | None = None,
 ) -> SimOutcome:
     """Replay a lane through the chat loop, blocking only where the plan says to.
 
@@ -774,6 +786,7 @@ async def run_simulation(
         trace=trace,
         store=store,
         learner=learner,
+        router=router,
     )
     pump: asyncio.Task[None] | None = None
     if input_queue is None:

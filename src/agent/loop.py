@@ -7,6 +7,7 @@ from typing import IO
 
 from agent.autonomy.bandit import Learner
 from agent.autonomy.preferences import RememberedProvider
+from agent.autonomy.router import Router
 from agent.dataset import LaneView
 from agent.gateway import ProposalGateway, ProposalProvider, RuleProvider
 from agent.graph import GraphOutcome, GraphSession
@@ -123,6 +124,9 @@ async def run_loop(
     replies = ScriptedReplies(script)
     queue: asyncio.Queue[str] = asyncio.Queue()
     learner = Learner()
+    # One router for both passes: what the calibration earns is what the autonomous pass
+    # then spends, which is the whole point of running them in that order.
+    router = Router(learner)
 
     calibration = await run_simulation(
         view,
@@ -133,6 +137,7 @@ async def run_loop(
         policy=ProposalPolicy(ProposalGateway(inner)),
         store=store,
         learner=learner,
+        router=router,
         window=window,
         trace=trace,
     )
@@ -143,6 +148,7 @@ async def run_loop(
         seed=seed,
         gateway=ProposalGateway(remembered),
         mask=mask,
+        router=router,
         window=window,
         trace=trace,
     )

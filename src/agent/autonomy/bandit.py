@@ -17,6 +17,17 @@ APPROVING_KINDS = frozenset(
 )
 
 
+def is_approving(event: FeedbackEvent) -> bool:
+    """Whether this reading is a vote for the agent acting on its own.
+
+    Shared with the router, which adapts a bucket's cutoffs on the same reading rather than
+    deciding a second time what the user meant.
+    """
+    if event.chosen_route is not None:
+        return event.chosen_route in AUTONOMOUS_ROUTES
+    return event.kind in APPROVING_KINDS
+
+
 class Learner:
     """Counts what the user said into posteriors, once per event, never from silence.
 
@@ -90,9 +101,7 @@ class Learner:
 
     def _approved(self, event: FeedbackEvent) -> bool:
         """Whether this reading is a vote for the agent acting on its own."""
-        if event.chosen_route is not None:
-            return event.chosen_route in AUTONOMOUS_ROUTES
-        return event.kind in APPROVING_KINDS
+        return is_approving(event)
 
     def _refuse(self, event: FeedbackEvent, bucket: Bucket, claim: Claim | None) -> None:
         """Keep the refusal, with the scope the rule was confirmed for rather than this mail's."""
@@ -105,4 +114,4 @@ class Learner:
         self.blocks[name] = (scope, event.chosen_action_id)
 
 
-__all__ = ["AUTONOMOUS_ROUTES", "Learner"]
+__all__ = ["AUTONOMOUS_ROUTES", "Learner", "is_approving"]

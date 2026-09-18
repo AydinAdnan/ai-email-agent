@@ -426,7 +426,7 @@ class ExplodingPolicy:
 
     source = "exploding"
 
-    async def decide(self, case):
+    async def decide(self, case, *, router=None):
         raise RuntimeError("policy is broken")
 
 

@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 
+from agent.autonomy.router import Router
 from agent.dataset import Case, LaneView
 from agent.events import Message
 from agent.gateway import NO_ACTION_TOOL, ProposalError, ProposalGateway, RuleProvider
@@ -24,6 +25,7 @@ from agent.state import (
     message_digest,
     prepared_fields,
     receipt_fields,
+    routing_fields,
     verdict_fields,
 )
 from agent.tools.email_tools import SimulatedMailbox, build_registry
@@ -57,6 +59,9 @@ class GraphRuntime:
     # The stage the plan puts in front of the provider. Off measures the graph against
     # the simulator, which has never masked.
     mask: bool = True
+    # The run's router when it has one - the simulator's, so earned trust carries into the
+    # graph - and a cold one otherwise: the user's own rules, and no history behind them.
+    router: Router = field(default_factory=Router)
     masked: dict[str, Message] = field(default_factory=dict)
     hints: dict[str, Triage] = field(default_factory=dict)
     decisions: dict[str, Decision] = field(default_factory=dict)
@@ -157,13 +162,29 @@ async def proposal(state: GraphState, context: GraphRuntime) -> GraphState:
     except ProposalError as error:
         # No usable proposal is not a licence to guess; it is a reason to escalate.
         message = f"no usable proposal: {error}"
-        context.decisions[case_id] = route_decision(case, hints, None, message, source="graph")
+        context.decisions[case_id] = route_decision(
+            case,
+            hints,
+            None,
+            message,
+            source="graph",
+            router=context.router,
+            provider=context.gateway.provider,
+        )
         return {
             "node": "proposal",
             "proposal": {"source": "graph", "error": str(error)},
             "errors": [*state.get("errors", []), str(error)],
         }
-    context.decisions[case_id] = route_decision(case, hints, answer, answer.rationale, source="graph")
+    context.decisions[case_id] = route_decision(
+        case,
+        hints,
+        answer,
+        answer.rationale,
+        source="graph",
+        router=context.router,
+        provider=context.gateway.provider,
+    )
     return {
         "node": "proposal",
         "proposal": {
@@ -176,13 +197,14 @@ async def proposal(state: GraphState, context: GraphRuntime) -> GraphState:
 
 
 async def route(state: GraphState, context: GraphRuntime) -> GraphState:
-    """Record the route the floor left standing, which is what authorization checks."""
+    """Record the route the router chose, which is what authorization checks."""
     decision = context.decisions[state["case_id"]]
     return {
         "node": "route",
         "route": decision.route.value,
         "action_id": decision.action_id,
         "floor": verdict_fields(decision.verdict),
+        "routing": routing_fields(decision.routing),
     }
 
 
@@ -387,6 +409,7 @@ class GraphSession:
         window: int = WINDOW_SIZE,
         trace: TraceSink | None = None,
         checkpointer: Any | None = None,
+        router: Router | None = None,
     ) -> None:
         self.view = view
         self.seed = seed
@@ -403,6 +426,7 @@ class GraphSession:
             clock=SeededClock(seed=seed),
             known_senders=dict(known_senders or {}),
             mask=mask,
+            router=router,
         )
         self.app = build_graph(self.context, checkpointer=checkpointer)
         self.outcome = GraphOutcome()
@@ -568,6 +592,7 @@ async def run_graph(
     window: int = WINDOW_SIZE,
     trace: TraceSink | None = None,
     checkpointer: Any | None = None,
+    router: Router | None = None,
 ) -> GraphOutcome:
     """Walk a lane through the graph, one decision per checkpoint thread."""
     session = GraphSession(
@@ -581,6 +606,7 @@ async def run_graph(
         window=window,
         trace=trace,
         checkpointer=checkpointer,
+        router=router,
     )
     return await session.run()
 
