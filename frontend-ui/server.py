@@ -19,6 +19,12 @@ from typing import Any
 from agent.ui.session import Session
 
 ROOT = Path(__file__).resolve().parent
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT.parent / ".env")
+except ImportError:
+    pass
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -72,6 +78,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _start(self, body: dict[str, Any]) -> None:
         """Begin a run from the form the page sent."""
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(ROOT.parent / ".env", override=True)
+        except ImportError:
+            pass
         if SESSION is not None and not SESSION.done:
             self._json({"error": "a session is already running; stop it first"}, status=409)
             return
