@@ -3,11 +3,12 @@
 Everything here runs on stand-ins, so the environment is exercised end to end without a
 network, a key, or a judge.
 """
+import asyncio
+import io
 import json
 from pathlib import Path
 
 from agent.dataset import Manifest
-from agent.gateway import RuleProvider
 from agent.safety.floor import Route
 from evals.harness import dispositions
 from evals.sandbox import (
@@ -122,6 +123,9 @@ class FakeModel:
         self.mails = {brief: body for brief, body in MAIL_BY_BRIEF.items()}
         self.written = 0
         self.answered = 0
+        # Every message the agent asked a proposal about, so a test can prove which half
+        # of a run went to the model rather than to a fallback.
+        self.seen: list[str] = []
 
     async def text(self, prompt: str, *, system: str = "", stage: str = "") -> str:
         """Answer whichever question the prompt asks, in the role whose stage it is."""
@@ -131,6 +135,7 @@ class FakeModel:
         return REPLY
 
     async def complete(self, request) -> str:
+        self.seen.append(request.message.message_id)
         return json.dumps(
             {
                 "route": "PROCEED_SILENTLY",
@@ -174,18 +179,21 @@ def run(tmp_path: Path, *, count: int = 6, strict: bool = False):
 
 
 def _run(tmp_path: Path, *, count: int, strict: bool):
-    import asyncio
+    return _run_with(tmp_path, count=count, model=FakeModel(strict=strict))
 
-    model = FakeModel(strict=strict)
+
+def _run_with(tmp_path: Path, *, count: int, model: FakeModel, notes=None):
+    """The whole environment on stand-ins: no key, no network, no judge."""
     return asyncio.run(
         run_sandbox(
             count=count,
             seed=7,
             out=tmp_path,
             no_judge=True,
-            proposer=RuleProvider(),
+            proposer=model,
             writer=model,
             user=model,
+            notes=notes,
         )
     )
 
@@ -274,6 +282,77 @@ def test_the_judge_is_optional_and_says_so(tmp_path: Path):
     assert outcome.judge_error
     counted = dispositions(outcome.autonomous.routes.values())
     assert counted.automated + counted.user_review + counted.escalate == outcome.autonomous.processed
+
+
+def test_the_unseen_half_is_proposed_by_the_model_not_a_fallback(tmp_path: Path):
+    """The graph half has to run through the model: a fallback would decide the mail itself.
+
+    Proven by the mail the model was shown, not by a label in the report. The route comes
+    from the model's proposal wherever the persona's own rules did not settle the mail
+    first, which is why the ids the model saw are a subset of the mailbox.
+    """
+    model = FakeModel(strict=True)
+    outcome = _run_with(tmp_path, count=10, model=model)
+    shown = {message_id.removeprefix("msg-").upper() for message_id in model.seen}
+    every_id = {arrival.case_id for arrival in outcome.arrivals}
+    unseen = {arrival.case_id for arrival in outcome.autonomous_cases}
+    assert shown <= every_id, "the model was asked about mail that is not in the mailbox"
+    assert shown & unseen, "the unseen half never reached the model"
+    assert outcome.proposer_model == model.label
+
+
+def test_the_run_narrates_its_steps(tmp_path: Path):
+    """A run of a live model takes minutes, so it says where it is at every step."""
+    notes = io.StringIO()
+    outcome = _run_with(tmp_path, count=6, model=FakeModel(strict=True), notes=notes)
+    write_report(outcome, notes=notes)
+    told = notes.getvalue()
+    for expected in (
+        "agent:",
+        "world:",
+        "out:",
+        "first half teaches the learner",
+        "writing the mailbox: 6 model call(s)",
+        "[  6/6]",
+        "mailbox written: 6 arrival(s) kept, 0 lost",
+        "split: 3 to learn on, 3 to be decided cold",
+        "calibration: 3 arrival(s), the owner answers what waits",
+        "calibration done:",
+        "frozen: learner and rules at",
+        "the unseen half: 3 arrival(s) it has never seen",
+        "decided: 3 arrival(s)",
+        "no judge:",
+        "---- artifacts ",
+        "wrote report.json, report.md",
+        # Ruled off, and every decision block says what the mail was and what was decided.
+        "=" * 78,
+        "from:",
+        "subject:",
+        "body:",
+        "decided:",
+        " -> ",
+    ):
+        assert expected in told, f"the run never said {expected!r}"
+    # Every arrival is named twice: once as it was written, once as it was decided.
+    for arrival in outcome.arrivals:
+        assert told.count(arrival.case_id) >= 1
+    assert (Path(outcome.out) / "calibration.log").read_text(encoding="utf-8")
+
+
+def test_the_printed_report_is_ruled_into_sections(tmp_path: Path):
+    """The summary a run ends with is segmented the same way the log is."""
+    told = render(run(tmp_path, count=6))
+    assert told.startswith("=" * 78)
+    assert told.rstrip().endswith("=" * 78)
+    for section in (
+        "the four states, on the unseen half",
+        "calibration and what it learned",
+        "safety, counted from the run's own decisions, never judged",
+        "how good the routing was",
+        "cost",
+    ):
+        assert f"---- {section}" in told
+    assert "proceeded silently:" in told and "escalated:" in told
 
 
 def test_by_id_keeps_the_order_the_run_decided(tmp_path: Path):

@@ -540,9 +540,14 @@ class ProposalGateway:
         *,
         timeout: float = 20.0,
         ledger: Ledger | None = None,
+        stage: str = STAGE,
     ) -> None:
         self.provider = provider
         self.timeout = timeout
+        # Which pass is asking. A run that proposes twice - a lane taught, then a lane
+        # decided cold - wants the cost table to say which pass spent the money, and a
+        # report to be able to show that the second pass went to the model at all.
+        self.stage = stage
         self.repairs = 0
         self.failures = 0
         # One meter per run: the provider writes calls and tokens into it, the gateway
@@ -565,7 +570,7 @@ class ProposalGateway:
             self.ledger.arrival(deflected=True)
             return _mail_rules(_persona_refused(demanded), message, hints)
         self.ledger.arrival()
-        request = ProposalRequest(message=message, hints=hints)
+        request = ProposalRequest(message=message, hints=hints, stage=self.stage)
         try:
             first = await self._ask(request)
             return _mail_rules(parse_proposal(first, provider=self.provider.name), message, hints)
@@ -575,7 +580,7 @@ class ProposalGateway:
                 message=message,
                 hints=hints,
                 repair_note=str(first_error),
-                stage=f"{STAGE} (repair)",
+                stage=f"{self.stage} (repair)",
             )
             try:
                 second = await self._ask(repair)

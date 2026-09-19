@@ -272,7 +272,7 @@ def sandbox_run_command(args: argparse.Namespace, out: IO[str]) -> int:
     finally:
         if sink is not None:
             sink.close()
-    report, markdown, written = write_sandbox_report(outcome)
+    report, markdown, written = write_sandbox_report(outcome, notes=sys.stderr)
     out.write(render_sandbox(outcome) + "\n")
     out.write(f"\nartifacts: {report.name}, {markdown.name} in {outcome.out}\n")
     out.write(f"charts: {', '.join(path.name for path in written)}\n")

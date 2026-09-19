@@ -31,6 +31,8 @@ import os
 import random
 import re
 import sys
+import textwrap
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -368,13 +370,16 @@ def text_call(provider: Any, *, stage: str, timeout: float = 90.0) -> TextCall:
 
 
 async def write_mailbox(
-    call: TextCall, count: int, *, rng: random.Random
+    call: TextCall, count: int, *, rng: random.Random, notes: IO[str] | None = None
 ) -> tuple[tuple[Arrival, ...], tuple[str, ...]]:
     """Write `count` fresh arrivals, cycling the briefs in a shuffled order.
 
     A generation that answers with something unusable loses that arrival and says so,
     rather than inventing a replacement for it: a mailbox quietly smaller than asked for
     would make every denominator in the report a lie.
+
+    One line per arrival, because a model takes half a minute to write one and thirty of
+    them are ten minutes of a terminal that would otherwise look hung.
     """
     arrivals: list[Arrival] = []
     failures: list[str] = []
@@ -382,12 +387,17 @@ async def write_mailbox(
     rng.shuffle(briefs)
     for index, scenario in enumerate(briefs, start=1):
         prompt = generator_prompt(scenario, rng=rng)
+        started = time.monotonic()
         try:
             raw = await call(f"{GENERATOR_SYSTEM}\n\n{prompt}")
             mail = parse_generated(raw, scenario=scenario, index=index)
         except (SandboxError, ProposalError) as error:
             failures.append(f"{scenario.name}: {error}")
+            _note(notes, "", f"[{index:>3}/{count}] {scenario.name}: lost - {error}")
             continue
+        _note(notes, "", f"[{index:>3}/{count}] {scenario.name} in {_seconds(started)}")
+        _note(notes, "     ", f"from:    {mail['sender_name']} <{mail['sender_email']}>")
+        _note(notes, "     ", f"subject: {mail['subject']}")
         arrivals.append(
             Arrival(
                 case_id=f"SAND-{index:03d}",
@@ -446,6 +456,7 @@ class ModelUser:
 
     call: TextCall
     name: str
+    notes: IO[str] | None = None
     lines: list[str] = field(default_factory=list)
     approvals: int = 0
     refusals: int = 0
@@ -485,6 +496,12 @@ class ModelUser:
         if reading.claim is not None:
             confirm = str(payload.get("confirm", "")).strip()
             lines.append(confirm or DECLINE_LINE)
+        _note(
+            self.notes,
+            "    ",
+            f"the owner said about {decision.case_id}: {reply!r}"
+            + (" and confirmed it as a rule" if reading.claim is not None else ""),
+        )
         return tuple(lines)
 
     async def approve(self, decision: Decision, message: Message) -> bool:
@@ -497,6 +514,13 @@ class ModelUser:
         approved = payload.get("approve") is True
         self.approvals += 1 if approved else 0
         self.refusals += 0 if approved else 1
+        _note(
+            self.notes,
+            "    ",
+            f"the owner on the draft for {decision.case_id}: "
+            f"{'approved' if approved else 'declined'}"
+            + (f" - {reply!r}" if reply else ""),
+        )
         return approved
 
     def hook(self, queue: asyncio.Queue[Any], view: Any) -> Any:
@@ -732,11 +756,119 @@ class SandboxOutcome:
         return sum(scores) / len(scores) if scores else None
 
 
-def _note(notes: IO[str] | None, text: str) -> None:
-    """A run that takes minutes should say where it is, rather than look hung."""
+# A run's log is read in a terminal and pasted into a page, so it is ruled off into
+# sections rather than left as a column of loose lines.
+RULE = "=" * 78
+BODY_PREVIEW = 150
+
+
+def _note(notes: IO[str] | None, indent: str, text: str) -> None:
+    """A run that takes a while should say what it is doing, rather than look hung."""
     if notes is not None:
-        notes.write(f"  {text}\n")
+        notes.write(f"  {indent}{text}\n")
         notes.flush()
+
+
+def _banner(notes: IO[str] | None, title: str, lines: Sequence[str]) -> None:
+    """The opening block: what is running, and what it is pointed at."""
+    if notes is None:
+        return
+    notes.write(f"\n{RULE}\n{title}\n{RULE}\n")
+    for line in lines:
+        notes.write(f"  {line}\n")
+    notes.flush()
+
+
+def _section(notes: IO[str] | None, title: str) -> None:
+    """Rule off the next step, so a ten-minute run reads as parts, not one wall."""
+    if notes is None:
+        return
+    head = f"---- {title} "
+    notes.write(f"\n{head}{'-' * max(4, 78 - len(head))}\n")
+    notes.flush()
+
+
+def _blocks(notes: IO[str] | None, blocks: Sequence[str]) -> None:
+    """Write pre-formatted blocks - a mail and its decision - as they are."""
+    if notes is None:
+        return
+    for block in blocks:
+        notes.write(block + "\n")
+    notes.flush()
+
+
+def _seconds(started: float) -> str:
+    """How long a model call took, in the unit a reader cares about."""
+    elapsed = time.monotonic() - started
+    return f"{elapsed:.1f}s" if elapsed < 10 else f"{elapsed:.0f}s"
+
+
+def _preview(text: str, *, width: int = 60, lines: int = 2) -> tuple[str, ...]:
+    """The first of a mail's body, wrapped, for a log that has to stay skimmable."""
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        return ("(no body)",)
+    shortened = collapsed[:BODY_PREVIEW].rstrip()
+    if shortened != collapsed:
+        shortened += " ..."
+    wrapped = textwrap.wrap(shortened, width=width) or [""]
+    if len(wrapped) > lines:
+        wrapped = wrapped[:lines]
+        wrapped[-1] += " ..."
+    return tuple(wrapped)
+
+
+def _write_text(path: Path, text: str) -> Path:
+    """Keep a run's transcript, naming the file in the error rather than failing mute."""
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as error:
+        raise SandboxError(f"cannot write {path}: {error}") from error
+    return path
+
+
+def _case_blocks(record: LaneRecord, arrivals: Sequence[Arrival]) -> tuple[str, ...]:
+    """One block per arrival, in the order it was decided: the mail, the state, the outcome.
+
+    This is the record's own reading rather than a second opinion: the route comes from
+    the decision, and what followed - a receipt, a question, a refusal - from the same
+    fields the report counts.
+    """
+    known = {arrival.case_id: arrival for arrival in arrivals}
+    blocks: list[str] = []
+    for case_id in record.order:
+        arrival = known.get(case_id)
+        mail = arrival.mail if arrival is not None else {}
+        route = record.routes.get(case_id, "(none)")
+        receipt = record.receipts.get(case_id)
+        asked = record.asked.get(case_id)
+        if receipt is not None:
+            outcome = f"committed {receipt.summary()}"
+        elif asked:
+            outcome = f"waiting for the owner [{asked}]"
+        else:
+            outcome = "no action"
+        where = arrival.scenario.name if arrival is not None else "?"
+        sender = f"{mail.get('sender_name', '')} <{mail.get('sender_email', '')}>"
+        # The first body line carries the label, the rest line up under it: a wrapped
+        # paragraph is one thing, not four fields called body.
+        label = "body:" + " " * 3
+        body = [
+            f"    {label if position == 0 else ' ' * len(label)}{line}"
+            for position, line in enumerate(_preview(str(mail.get("body", ""))))
+        ]
+        blocks.append(
+            "\n".join(
+                [
+                    f"  {case_id}  {where}",
+                    f"    from:     {sender}",
+                    f"    subject:  {mail.get('subject', '')}",
+                    *body,
+                    f"    decided:  {route} -> {outcome}",
+                ]
+            )
+        )
+    return tuple(blocks)
 
 
 def _by_id(arrivals: Sequence[Arrival], order: Sequence[str]) -> tuple[Arrival, ...]:
@@ -794,9 +926,23 @@ async def run_sandbox(
         )
     user = user if user is not None else build_provider(provider, model=user_model or DEFAULT_JUDGE)
 
-    _note(notes, f"writing {count} arrival(s) with {getattr(writer, 'label', writer.name)} ...")
+    _banner(
+        notes,
+        f"WAJO sandbox - a live mailbox, {count} arrival(s), seed {seed}",
+        [
+            f"agent:   {getattr(proposer, 'label', proposer.name)}",
+            f"world:   {getattr(writer, 'label', writer.name)} writes, answers and judges",
+            f"out:     {out_dir}",
+            "first half teaches the learner; second half is decided cold",
+        ],
+    )
+    _section(
+        notes,
+        f"writing the mailbox: {count} model call(s) with "
+        f"{getattr(writer, 'label', writer.name)}, about half a minute each",
+    )
     arrivals, failures = await write_mailbox(
-        text_call(writer, stage="sandbox/writer"), count, rng=rng
+        text_call(writer, stage="sandbox/writer"), count, rng=rng, notes=notes
     )
     if len(arrivals) < 4:
         raise SandboxError(
@@ -807,9 +953,21 @@ async def run_sandbox(
         out_dir.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise SandboxError(f"cannot make the artifact directory {out_dir}: {error}") from error
-    _write_mailbox_file(out_dir / "mailbox.jsonl", arrivals)
-
+    mailbox_path = _write_mailbox_file(out_dir / "mailbox.jsonl", arrivals)
     half = len(arrivals) // 2
+    _note(
+        notes,
+        "",
+        f"mailbox written: {len(arrivals)} arrival(s) kept, {len(failures)} lost, at "
+        f"{mailbox_path}",
+    )
+    _note(
+        notes,
+        "",
+        f"split: {half} to learn on, {len(arrivals) - half} to be decided cold",
+    )
+    for failure in failures:
+        _note(notes, "     ", f"lost: {failure}")
     calibration_arrivals, autonomous_arrivals = arrivals[:half], arrivals[half:]
     cal_view = Manifest.from_mail_rows(
         [arrival.row() for arrival in calibration_arrivals], source="<generated: calibration>"
@@ -824,17 +982,27 @@ async def run_sandbox(
     learner = Learner()
     router = Router(learner)
     remembered = RememberedProvider(store, proposer)
-    person = ModelUser(call=text_call(user, stage="sandbox/user"), name="aydin")
+    person = ModelUser(
+        call=text_call(user, stage="sandbox/user"), name="aydin", notes=notes
+    )
 
-    _note(notes, f"calibrating on {len(calibration_arrivals)} arrival(s) ...")
+    _section(
+        notes,
+        f"calibration: {len(calibration_arrivals)} arrival(s), the owner answers what waits",
+    )
+    transcript = io.StringIO()
     queue: asyncio.Queue[Any] = asyncio.Queue()
     chat = await run_simulation(
         cal_view,
         seed=seed,
-        out=io.StringIO(),
+        out=transcript,
         input_queue=queue,
         on_interrupt=person.hook(queue, cal_view),
-        policy=ProposalPolicy(ProposalGateway(remembered, timeout=proposal_timeout)),
+        policy=ProposalPolicy(
+            ProposalGateway(
+                remembered, timeout=proposal_timeout, stage="proposal (calibration half)"
+            )
+        ),
         store=store,
         learner=learner,
         router=router,
@@ -843,6 +1011,14 @@ async def run_sandbox(
     )
     await close_input(queue)
     cal_record = record_from_chat(chat)
+    transcript_path = _write_text(out_dir / "calibration.log", transcript.getvalue())
+    _note(
+        notes,
+        "",
+        f"calibration done: {cal_record.processed} decided, {len(cal_record.asked)} asked, "
+        f"{len(cal_record.receipts)} committed - the full transcript is at {transcript_path}",
+    )
+    _blocks(notes, _case_blocks(cal_record, calibration_arrivals))
 
     # Frozen before the autonomous half starts: what it is measured against has to be the
     # state the calibration left behind, and a run that kept learning would measure itself.
@@ -852,17 +1028,35 @@ async def run_sandbox(
         raise ScoringError(str(error)) from error
     store.save()
     writes_before = learner.applied
+    _note(
+        notes,
+        "",
+        f"frozen: learner and rules at {learner_path} ({len(store.claims)} claim(s) stored), "
+        f"{learner.updates} posterior update(s) so far",
+    )
 
-    _note(notes, f"running the {len(autonomous_arrivals)} arrival(s) it has never seen ...")
+    _section(
+        notes,
+        f"the unseen half: {len(autonomous_arrivals)} arrival(s) it has never seen",
+    )
     session = GraphSession(
         auto_view,
         seed=seed,
-        gateway=ProposalGateway(remembered, timeout=proposal_timeout),
+        gateway=ProposalGateway(
+            remembered, timeout=proposal_timeout, stage="proposal (unseen half)"
+        ),
         router=router,
         window=window,
         trace=trace,
     )
     outcome = await session.run()
+    _note(
+        notes,
+        "",
+        f"decided: {outcome.processed} arrival(s), {len(outcome.receipts)} committed, "
+        f"{len(outcome.interrupts)} waiting on the owner",
+    )
+    _blocks(notes, _case_blocks(record_from_graph(outcome, session.context), autonomous_arrivals))
     # The agent asks; the model answers as the owner would. Nothing is approved by
     # default, and a refusal leaves the drafts where it is - which is what the ask is for.
     for case_id in list(outcome.interrupts):
@@ -874,11 +1068,13 @@ async def run_sandbox(
             continue
         message = session.context.cases[case_id].event.message
         if await person.approve(decision, message):
-            await session.resume(
+            result = await session.resume(
                 case_id, {"approved_by": "user", "prepared_digest": held.digest}
             )
+            _note(notes, "    ", f"the owner approved {case_id}: {result.status}")
         else:
-            await session.resume(case_id, None)
+            result = await session.resume(case_id, None)
+            _note(notes, "    ", f"the owner declined {case_id}: {result.status}")
     autonomous = record_from_graph(outcome, session.context)
     learning_writes = learner.applied - writes_before
     if learning_writes:
@@ -894,8 +1090,12 @@ async def run_sandbox(
         judge.error = "--no-judge: this run was not judged"
     judged: list[Judgement] = []
     if not no_judge and judge.available:
-        _note(notes, f"judging up to {judge_sample} case(s) with {judge.model} ...")
-        judged = await _judge_run(session, autonomous, judge, rng=rng, sample=judge_sample)
+        _section(notes, f"judging: up to {judge_sample} case(s), by {judge.model}")
+        judged = await _judge_run(
+            session, autonomous, judge, rng=rng, sample=judge_sample, notes=notes
+        )
+    elif judge.error:
+        _note(notes, "", f"no judge: {judge.error}")
 
     return SandboxOutcome(
         arrivals=arrivals,
@@ -931,6 +1131,7 @@ async def _judge_run(
     *,
     rng: random.Random,
     sample: int,
+    notes: IO[str] | None = None,
 ) -> list[Judgement]:
     """Ask the judge about a sample of the second half: the routes, and the drafts.
 
@@ -959,6 +1160,7 @@ async def _judge_run(
         )
         if verdict is not None:
             judged.append(verdict)
+        _blocks(notes, [_judged(verdict, case_id, decision.route.value)])
         draft = decision.predraft
         if draft is None:
             continue
@@ -971,18 +1173,27 @@ async def _judge_run(
         )
         if grounded is not None:
             judged.append(grounded)
+        _blocks(notes, [_judged(grounded, case_id, "its draft")])
+    if judge.error:
+        _note(notes, "", f"the judge stopped: {judge.error}")
     return judged
 
 
-def _write_mailbox_file(path: Path, arrivals: Sequence[Arrival]) -> None:
+def _judged(item: Judgement | None, case_id: str, what: str) -> str:
+    """One judged case: the score, then the judge's own reason for it."""
+    if item is None:
+        return f"  {case_id}  {what}: not judged"
+    reason = "\n".join(
+        f"    {line}" for line in textwrap.wrap(item.reason, width=66)[:2]
+    )
+    return f"  {case_id}  {item.question}  {item.score:.2f}  {what}\n{reason}"
+
+
+def _write_mailbox_file(path: Path, arrivals: Sequence[Arrival]) -> Path:
     """Keep the mailbox itself, so a report can be read next to the mail that produced it."""
-    try:
-        path.write_text(
-            "\n".join(json.dumps(arrival.as_record()) for arrival in arrivals) + "\n",
-            encoding="utf-8",
-        )
-    except OSError as error:
-        raise SandboxError(f"cannot write the mailbox to {path}: {error}") from error
+    return _write_text(
+        path, "\n".join(json.dumps(arrival.as_record()) for arrival in arrivals) + "\n"
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -1021,11 +1232,13 @@ def render(outcome: SandboxOutcome) -> str:
     rules = "\n".join(f"    {rule}" for rule in outcome.rules) or "    (none)"
     return "\n".join(
         [
-            f"mailbox: {len(outcome.arrivals)} fresh arrival(s) written by "
-            f"{outcome.writer_model}  seed {outcome.seed}",
-            f"pipeline: the {outcome.proposer_model} proposal, judging from "
-            f"inside the masked subject and body",
-            f"the user: {outcome.user_model}  the judge: {outcome.judge_model}",
+            RULE,
+            f"WAJO sandbox - {len(outcome.arrivals)} fresh arrival(s), seed {outcome.seed}",
+            RULE,
+            f"writer:   {outcome.writer_model}",
+            f"pipeline: {outcome.proposer_model}, judging from inside the masked mail",
+            f"owner:    {outcome.user_model}",
+            f"judge:    {outcome.judge_model}",
             "",
             "no two runs compare: the mail is written fresh, so these numbers describe this "
             "mailbox and not a trend",
@@ -1033,28 +1246,29 @@ def render(outcome: SandboxOutcome) -> str:
             f"calibrated on {cal.total} arrival(s), then run on "
             f"{outcome.autonomous.processed} it had never seen",
             "",
-            "the four states, on the unseen half:",
+            "---- the four states, on the unseen half " + "-" * 42,
             states,
             f"    automated (silent or notified without asking): "
             f"{_rate(silent + notified, outcome.autonomous.processed)}",
             f"    proceeded silently: {silent}   notified: {notified}   "
             f"asked: {counts[Route.ASK_FIRST_WITH_PREDRAFT]}   escalated: {counts[Route.ESCALATE]}",
             "",
-            f"calibration: {cal.asked} of {cal.total} decisions asked the user "
+            "---- calibration and what it learned " + "-" * 42,
+            f"asked: {cal.asked} of {cal.total} decisions needed the user "
             f"({cal.typings} line(s) typed, {cal.corrections} correction(s))",
             f"quietening: {max(cal.asked - outcome.asks_after, 0)} fewer arrival(s) waited "
             f"after learning ({cal.asked} before, {outcome.asks_after} after)",
             f"rules in force: {len(outcome.rules)}, recalling {outcome.recall} arrival(s)",
             rules,
             "",
-            "safety, counted from the run's own decisions rather than by a model:",
+            "---- safety, counted from the run's own decisions, never judged " + "-" * 15,
             outcome.safety.render(),
             f"  sends: {outcome.outcome.effects('email.send')} (simulated send is the only "
             "sending tool, and it is never committed)",
             f"  hostile arrivals escalated: {_rate(hostile, hostile_total)}",
             f"  learning writes on the unseen half: {outcome.learning_writes}",
             "",
-            "how good the routing was:",
+            "---- how good the routing was " + "-" * 48,
             f"  agreement with the brief's own expectation: {_rate(expected_matched, expected_graded)}"
             " (a hypothesis, never a gate)",
             f"  agreement with the writer's own opinion:      "
@@ -1063,8 +1277,9 @@ def render(outcome: SandboxOutcome) -> str:
             *judged,
             *([f"    judge unavailable: {outcome.judge_error}"] if outcome.judge_error else []),
             "",
-            "cost:",
+            "---- cost " + "-" * 68,
             LEDGER.render(),
+            RULE,
         ]
     )
 
@@ -1244,13 +1459,23 @@ def _save(figure: Any, path: Path) -> Path:
     return path
 
 
-def write_report(outcome: SandboxOutcome) -> tuple[Path, Path, tuple[Path, ...]]:
+def write_report(
+    outcome: SandboxOutcome, notes: IO[str] | None = None
+) -> tuple[Path, Path, tuple[Path, ...]]:
     """Write the run: the JSON, a readable markdown page, and the three charts."""
-    json_path = outcome.out / "report.json"
-    json_path.write_text(json.dumps(as_dict(outcome), indent=2) + "\n", encoding="utf-8")
-    markdown = outcome.out / "report.md"
-    markdown.write_text(_markdown(outcome), encoding="utf-8")
-    return json_path, markdown, charts(outcome, outcome.out / "charts")
+    _section(notes, "artifacts")
+    written = charts(outcome, outcome.out / "charts")
+    json_path = _write_text(
+        outcome.out / "report.json", json.dumps(as_dict(outcome), indent=2) + "\n"
+    )
+    markdown = _write_text(outcome.out / "report.md", _markdown(outcome))
+    _note(
+        notes,
+        "",
+        f"wrote {json_path.name}, {markdown.name} and "
+        f"{', '.join(path.name for path in written)}",
+    )
+    return json_path, markdown, written
 
 
 def _markdown(outcome: SandboxOutcome) -> str:
@@ -1322,7 +1547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (SandboxError, ProposalError, ManifestError, ScoringError, OSError) as error:
         sys.stderr.write(f"cannot run the sandbox: {error}\n")
         return 2
-    _, _, written = write_report(outcome)
+    _, _, written = write_report(outcome, notes=sys.stderr)
     sys.stdout.write(render(outcome) + "\n")
     sys.stdout.write(f"\nartifacts: {outcome.out} ({', '.join(path.name for path in written)})\n")
     return 0
