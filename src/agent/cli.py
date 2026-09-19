@@ -32,7 +32,7 @@ from agent.gateway import (
     build_provider,
 )
 from agent.graph import GraphError, GraphSession
-from agent.loop import run_loop
+from agent.loop import LoopReport, run_loop
 from agent.memory.claims import ClaimError, ClaimStore
 from agent.memory.consent import Capability, Grant, session_grant
 from agent.sim.policy import GoldPolicy, ProposalPolicy
@@ -526,6 +526,7 @@ def loop_run(args: argparse.Namespace, out: IO[str]) -> int:
             sink.close()
 
     recalled = set(report.recalled)
+    baseline = report.without_rules
     out.write(
         f"\n[pass 2] autonomous: the same lane and seed, with {len(report.claims)} kept "
         "rule(s) answering before the provider\n"
@@ -534,17 +535,20 @@ def loop_run(args: argparse.Namespace, out: IO[str]) -> int:
         message = view.open(case_id).event.message
         committed = case_id in {item.case_id for item in report.autonomous.receipts}
         ended = "committed" if committed else report.autonomous.interrupts.get(case_id, "")
+        was = None if baseline is None else baseline.routes.get(case_id)
         mark = "  <- from a rule" if message.message_id in recalled else ""
+        if mark and was is not None and was != report.autonomous.routes.get(case_id):
+            mark = f"{mark} (was {was})"
         out.write(
             f"[{index:>3}/{len(report.autonomous.order)}] {case_id}  "
             f"{report.autonomous.routes.get(case_id, ''):<24} {ended}{mark}\n"
         )
     out.write(
-        f"\nasked for a line: {report.asked_before} in pass 1, {report.asked_after} in pass 2"
-        f"  ({report.quietened} decided by a rule)\n"
+        f"\nasked for a line: {report.asked_before} in pass 1, {report.asked_after} in pass 2\n"
         f"receipts: {len(report.calibration.receipts)} in pass 1, "
         f"{len(report.autonomous.receipts)} in pass 2\n"
     )
+    _rule_effect(report, out)
     if not report.claims:
         out.write("no rule was confirmed, so pass 2 decides exactly as pass 1\n")
     elif not args.store:
@@ -555,6 +559,32 @@ def loop_run(args: argparse.Namespace, out: IO[str]) -> int:
     if sink is not None:
         out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
     return 0 if report.autonomous.processed == len(view.cases) else 1
+
+
+def _rule_effect(report: LoopReport, out: IO[str]) -> None:
+    """What the rules answered, and what the same lane would have done without them."""
+    if not report.answered:
+        return
+    taught = sum(1 for case_id, source in report.answered.items() if case_id == source)
+    out.write(
+        f"\nthe rules answered {len(report.answered)} arrival(s): {taught} the mail they were "
+        f"taught on, {len(report.answered) - taught} that came later\n"
+    )
+    if report.without_rules is None:
+        return
+    out.write(
+        f"with the same lane run with no rules at all: {report.asked_without_rules} arrival(s) "
+        f"would have waited, so the rules saved {report.saved} ask(s) and moved "
+        f"{len(report.changed)} route(s), {len(report.changed_later)} of them after the mail "
+        "that taught them\n"
+    )
+    changed = "\n".join(
+        f"    {case_id}  {report.without_rules.routes.get(case_id, '')} -> "
+        f"{report.autonomous.routes.get(case_id, '')}"
+        for case_id in report.changed
+    )
+    if changed:
+        out.write(f"the rules moved:\n{changed}\n")
 
 
 def graph_run(args: argparse.Namespace, out: IO[str]) -> int:

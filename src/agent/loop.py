@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import IO
 
@@ -76,12 +76,23 @@ class LoopReport:
     claims: tuple[Claim, ...]
     # The messages a confirmed rule answered in the second pass.
     recalled: tuple[str, ...]
+    # Each arrival a rule answered, and the arrival whose mail taught that rule.
+    answered: Mapping[str, str]
+    # The same lane, same seed and same learner, with no rules in front of the provider:
+    # what the second pass would have decided had the first pass taught nothing. None when
+    # no rule answered anything, because then there is nothing to compare against.
+    without_rules: GraphOutcome | None
     # What the calibration counted: the posteriors the router will read.
     learner: Learner
 
     @property
     def asked_before(self) -> int:
-        """Decisions that waited for a human, with nothing remembered yet."""
+        """Decisions the chat pass waited on.
+
+        Not a baseline: a rule takes effect from the next arrival, so the chat pass is
+        already quieter than no rules at all from the mail it was taught on. The honest
+        baseline is ``without_rules``, and ``saved`` is the difference it measures.
+        """
         return self.calibration.interrupts
 
     @property
@@ -90,9 +101,49 @@ class LoopReport:
         return len(self.autonomous.interrupts)
 
     @property
-    def quietened(self) -> int:
-        """How many decisions the rules took off the user's screen."""
-        return max(self.asked_before - self.asked_after, 0)
+    def asked_without_rules(self) -> int:
+        """Decisions the same lane waits on with nothing remembered, or 0 with no control."""
+        return 0 if self.without_rules is None else len(self.without_rules.interrupts)
+
+    @property
+    def changed(self) -> tuple[str, ...]:
+        """Arrivals a rule sent somewhere else than the lane would have gone on its own."""
+        if self.without_rules is None:
+            return ()
+        return tuple(
+            case_id
+            for case_id in self.autonomous.order
+            if self.without_rules.routes.get(case_id) != self.autonomous.routes.get(case_id)
+        )
+
+    @property
+    def changed_later(self) -> tuple[str, ...]:
+        """Of those, the arrivals that came after the mail their rule was taught on.
+
+        This is the number that says the agent learned something rather than echoed back
+        the decision it was just handed: a rule answering its own teaching mail changes
+        nothing for any other arrival.
+        """
+        return tuple(
+            case_id for case_id in self.changed if self.answered.get(case_id) != case_id
+        )
+
+    @property
+    def saved(self) -> int:
+        """Asking the rules took off the user, measured against the lane with no rules.
+
+        Counted per arrival rather than from the ask totals: a lane where a rule silences
+        four asks and the learner's own drift adds one would report saving one, which is
+        not what the rules did.
+        """
+        if self.without_rules is None:
+            return 0
+        return sum(
+            1
+            for case_id in self.answered
+            if case_id in self.without_rules.interrupts
+            and case_id not in self.autonomous.interrupts
+        )
 
 
 async def run_loop(
@@ -116,6 +167,11 @@ async def run_loop(
 
     Both passes decide through the same safety floor, which is what makes the second one
     safe to trust: it can only be quieter where the floor leaves it that room.
+
+    A third pass walks the lane with no rules in front of the provider, so the report can
+    say what the rules changed rather than assume every arrival a rule answered would
+    otherwise have waited. It is skipped when nothing was kept, and it is one more pass
+    over the lane, so a run against a model pays for it.
     """
     inner = provider if provider is not None else RuleProvider()
     store = store if store is not None else ClaimStore(
@@ -156,6 +212,19 @@ async def run_loop(
         trace=trace,
     )
     autonomous = await session.run()
+    answered = _answered_cases(view, store, remembered)
+    without_rules = None
+    if answered:
+        # Same seed, same lane, same learner, same floor - only the memory in front of the
+        # provider is gone, so a route that differs is a route a rule moved.
+        without_rules = await GraphSession(
+            view,
+            seed=seed,
+            gateway=ProposalGateway(inner),
+            mask=mask,
+            router=router,
+            window=window,
+        ).run()
     return LoopReport(
         source=remembered.label,
         total=len(view.cases),
@@ -163,8 +232,25 @@ async def run_loop(
         autonomous=autonomous,
         claims=tuple(store.claims),
         recalled=tuple(sorted(remembered.answered)),
+        answered=answered,
+        without_rules=without_rules,
         learner=learner,
     )
+
+
+def _answered_cases(
+    view: LaneView, store: ClaimStore, remembered: RememberedProvider
+) -> dict[str, str]:
+    """Each arrival a rule answered, mapped to the arrival whose mail taught that rule."""
+    by_message = {case.event.message.message_id: case.case_id for case in view.cases}
+    by_claim = {claim.claim_id: claim for claim in store.claims}
+    answered: dict[str, str] = {}
+    for message_id, claim_id in remembered.answered.items():
+        case_id = by_message.get(message_id)
+        claim = by_claim.get(claim_id)
+        if case_id is not None and claim is not None:
+            answered[case_id] = claim.source_case_id or case_id
+    return answered
 
 
 __all__ = ["LoopReport", "ScriptedReplies", "run_loop"]

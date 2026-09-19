@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from agent.cli import build_parser, graph_run, loop_run, sim_run
-from agent.dataset import Lane, LaneView, Manifest
+from agent.dataset import DEFAULT_DATASET_PATH, Lane, LaneView, Manifest
 from agent.loop import LoopReport, ScriptedReplies, run_loop
 from agent.memory.claims import ClaimStore
 from agent.memory.consent import session_grant
@@ -43,6 +43,51 @@ def loop(script: Sequence[str] = ()) -> tuple[LoopReport, str]:
         )
     )
     return report, out.getvalue()
+
+
+def recruiter_lane() -> LaneView:
+    """The whole class of recruiter arrivals, in order, and nothing else beside it."""
+    full = Manifest.load(DEFAULT_DATASET_PATH)
+    rows = [
+        case.row
+        for case in full.cases
+        if (case.row.get("incoming_email") or {}).get("intent") == "recruiter follow-up"
+    ]
+    return Manifest.from_rows(
+        rows, source="recruiter arrivals", dataset_digest=full.dataset_digest
+    ).view(Lane.CALIBRATION)
+
+
+def test_a_rule_taught_on_one_arrival_decides_the_ones_that_come_later():
+    """The learning claim, measured: one correction about a class, four quieter arrivals.
+
+    The teaching mail is not evidence - a rule answering its own case changed nothing for
+    anybody else. The four recruiter arrivals after it are, and they are counted against
+    the same lane run with no rules at all rather than assumed from the ask totals.
+    """
+    view = recruiter_lane()
+    report = asyncio.run(
+        run_loop(
+            view,
+            seed=7,
+            out=io.StringIO(),
+            script=[f"{RECRUITER_CASE}=always file recruiter follow-ups silently; yes"],
+            store=ClaimStore(grant=session_grant(purpose="test session")),
+        )
+    )
+
+    later = {case.case_id for case in view.cases if case.case_id != RECRUITER_CASE}
+    assert len(later) == 4, later
+    assert set(report.answered) == later | {RECRUITER_CASE}
+    assert set(report.answered.values()) == {RECRUITER_CASE}
+    assert set(report.changed_later) == later
+    assert report.without_rules is not None
+    for case_id in later:
+        assert report.without_rules.routes[case_id] == "ASK_FIRST_WITH_PREDRAFT"
+        assert report.autonomous.routes[case_id] == "PROCEED_SILENTLY"
+        assert case_id not in report.autonomous.interrupts
+    # Five arrivals a rule answered, five asks the lane would have waited on without it.
+    assert report.saved == 5
 
 
 def asked(text: str) -> tuple[int, int]:

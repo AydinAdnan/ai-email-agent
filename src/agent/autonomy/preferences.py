@@ -33,7 +33,9 @@ class RememberedProvider:
     def __init__(self, store: ClaimStore, inner: ProposalProvider) -> None:
         self.store = store
         self.inner = inner
-        self.answered: set[str] = set()
+        # Which mail a rule answered, and which rule: a report has to be able to say what
+        # was recalled, not only how many. Keyed by message id, valued by claim id.
+        self.answered: dict[str, str] = {}
 
     @property
     def name(self) -> str:
@@ -52,8 +54,9 @@ class RememberedProvider:
 
     async def complete(self, request: ProposalRequest) -> str:
         """Answer from a claim where one bears on this mail, otherwise ask the inner one."""
-        recalled = self.proposal_for(request.message, request.hints)
-        if recalled is None:
+        claim = self.claim_for(request.message, request.hints)
+        recalled = proposal_from(claim) if claim is not None else None
+        if claim is None or recalled is None:
             return await self.inner.complete(request)
         if recalled.action_id is None and recalled.route is not Route.ESCALATE:
             # The rule says how much autonomy, not what the work is: the inner provider
@@ -61,7 +64,7 @@ class RememberedProvider:
             # this a rule that names only silence arrives at the floor as an unrecognized
             # tool, which escalates the very mail the user asked to stop hearing about.
             recalled = _with_inner_action(recalled, await self.inner.complete(request))
-        self.answered.add(request.message.message_id)
+        self.answered[request.message.message_id] = claim.claim_id
         return json.dumps(
             {
                 "route": recalled.route.value,
@@ -73,16 +76,20 @@ class RememberedProvider:
             sort_keys=True,
         )
 
-    def proposal_for(self, message: Message, hints: Triage) -> Proposal | None:
-        """What the user's own words amount to for this mail, if anything."""
+    def claim_for(self, message: Message, hints: Triage) -> Claim | None:
+        """The confirmed claim that bears on this mail and names a route, if one does."""
         sender = message.sender.email
         for claim in self.store.matching(
             sender=sender, domain=_domain(sender), intent=hints.intent
         ):
-            proposal = proposal_from(claim)
-            if proposal is not None:
-                return proposal
+            if claim.route is not None:
+                return claim
         return None
+
+    def proposal_for(self, message: Message, hints: Triage) -> Proposal | None:
+        """What the user's own words amount to for this mail, if anything."""
+        claim = self.claim_for(message, hints)
+        return proposal_from(claim) if claim is not None else None
 
 
 def _with_inner_action(recalled: Proposal, answer: str) -> Proposal:
