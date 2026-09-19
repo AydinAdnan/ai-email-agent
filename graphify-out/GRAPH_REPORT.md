@@ -1,600 +1,519 @@
 # Graph Report - ai-email-agent  (2026-09-19)
 
 ## Corpus Check
-- 93 files · ~80,095 words
+- 93 files · ~81,965 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2437 nodes · 5671 edges · 155 communities (109 shown, 46 thin omitted)
-- Extraction: 86% EXTRACTED · 14% INFERRED · 0% AMBIGUOUS · INFERRED: 775 edges (avg confidence: 0.92)
+- 2355 nodes · 6308 edges · 113 communities (98 shown, 15 thin omitted)
+- Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 1052 edges (avg confidence: 0.95)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `fc414a37`
+- Built from commit: `adba3333`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- SeededClock
+- GraphSession
 - policy.py
 - graph.py
-- run_eval.py
+- .prepare
 - ClaimStore
-- test_economics.py
+- Ledger
 - feedback.py
-- Manifest
+- dataset.py
 - Bucket
-- test_feedback_parser.py
+- ScopeAnchor
+- floor_check
+- test_claim_schema.py
+- ChatRunner
 - ActionPayload
-- ClaimScope
-- runner.py
-- EmailContext
 - Handler
-- Session
-- eval_all
-- harness.py
+- _server
+- test_graph_state.py
+- HeldOutReport
 - test_floor.py
-- ValueError
-- GraphSession
-- EventValidationError
+- injection.py
+- test_gateway.py
+- Tool
 - test_sim.py
 - test_sim_tools.py
 - Effect
 - test_draft_validation.py
-- Ledger
-- test_gateway.py
-- agent/state.py
+- .render
+- ProposalError
+- state
 - app.js
-- ProposalRequest
+- VetoLevel
 - drafts.py
-- agent/triage.py
+- ReplyTree
 - test_predrafts.py
-- RoutingRequest
+- Posterior
 - Learner
 - test_replay.py
-- session.py
+- Transcript
 - mask_for_llm
-- PresidioMasker
-- _split_problems
-- arrivals
-- SimulatedMailbox
+- masker.py
+- Session
+- run_typed
+- email_tools.py
 - claims.py
-- Case
+- schedule
 - main
 - LaneView
 - test_triage.py
 - test_graph_resume.py
 - retrieve_style
 - Routes
-- run_typed
+- TraceSink
 - test_graph.py
-- ContextPhoneRecognizer
+- Routing
 - OpenAICompatibleProvider
-- registry.py
-- .load
+- runner.py
+- NotifyUser
 - run_canonical.py
 - EffectLog
-- SentExample
-- FakeCompletions
-- Thread
-- Any
+- drafting_for
+- AnswerQueue
+- SimError
+- set_session
 - gateway.py
-- Tool
+- ask_curve
 - test_events.py
-- floor.py
-- test_cases.py
+- plan_deviation
+- validate_cases
 - test_freeze.py
-- run_simulation
-- ClaimStore
-- masker.py
-- get_token_map
-- events.py
+- Manifest
+- .interrupts
+- .predraft
+- test_lanes_split_the_dataset_without_overlap
+- test_floor_protection.py
 - trace.py
-- DecisionSource
-- CaseReport
+- test_unknown_case_id_is_a_lookup_error
+- ProposalGateway
 - view
-- IO
-- replay
-- run_loop
-- Any
+- test_development_lane_has_nothing_to_learn_from
+- test_lane_view_is_bound_to_its_lane
+- test_loop.py
 - Workflow: graphify
-- test_denominators.py
+- Lane
 - email-autonomy-agent
 - router.py
 - Route
 - rules/graphify.md
 - DESIGN.md
 - README.md
-- StrEnum
-- parametrize
-- ProposalGateway
-- replay.py
-- Any
-- datetime
-- InterruptHook
-- Queue
-- datetime
-- ValueError
-- parametrize
-- RuntimeError
-- StrEnum
-- fixture
-- SafetyVerdict
-- .predraft
-- test_eval_run.py
-- Cutoffs
-- email_tools.py
-- valid
-- first_interrupt_of
-- FeedbackEvent
-- classify_action
-- dataset.py
-- EvalReport
-- record_from_chat
-- test_loop.py
-- ProposalProvider
-- dispositions
-- _case_from_mail_row
-- datetime
-- ProposalGateway
-- Any
-- test_benign_workplace_clean_pass
-- RuntimeError
-- RuntimeError
-- Case
-- ClaimStore
-- IO
-- Router
+- run_simulation
 - SimulatedMailbox
-- CaptureFixture
-- MonkeyPatch
-- ProposalProvider
-- MonkeyPatch
-- _order_key
-- Route
-- parametrize
-- Any
-- datetime
-- InterruptHook
-- IO
-- Queue
+- safety/__init__.py
+- Block
+- evaluate
+- autonomy/state.py
+- _background_loop
+- interrupting_case_ids
+- ActionClass
+- cli.py
+- Disposition
+- test_a_strangers_instructions_fence_every_route_whatever_the_action
+- Validation
 
 ## God Nodes (most connected - your core abstractions)
-1. `Route` - 85 edges
-2. `Learner` - 42 edges
-3. `Router` - 41 edges
-4. `Bucket` - 40 edges
-5. `ActionPayload` - 36 edges
-6. `Lane` - 34 edges
-7. `run_simulation()` - 34 edges
-8. `floor_check()` - 32 edges
-9. `ClaimStore` - 31 edges
-10. `Manifest` - 31 edges
+1. `Route` - 188 edges
+2. `Lane` - 71 edges
+3. `Router` - 67 edges
+4. `Learner` - 60 edges
+5. `Manifest` - 57 edges
+6. `ChatRunner` - 53 edges
+7. `Case` - 50 edges
+8. `Message` - 50 edges
+9. `ClaimStore` - 50 edges
+10. `ProposalGateway` - 49 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `test_every_type_the_plan_names_is_allowed_and_nothing_else()` --uses--> `ClaimType`  [INFERRED]
+  tests/memory/test_claim_schema.py → src/agent/memory/claims.py
 - `test_the_cost_is_the_published_rate_for_that_sample()` --uses--> `Spend`  [INFERRED]
   tests/eval/test_economics.py → src/agent/usage.py
-- `test_a_model_nobody_prices_is_unpriced_rather_than_free()` --uses--> `Ledger`  [INFERRED]
-  tests/eval/test_economics.py → src/agent/usage.py
-- `test_an_empty_run_reports_zero_rather_than_dividing_by_it()` --uses--> `Ledger`  [INFERRED]
-  tests/eval/test_economics.py → src/agent/usage.py
-- `test_the_deflection_rate_counts_arrivals_not_calls()` --uses--> `Ledger`  [INFERRED]
-  tests/eval/test_economics.py → src/agent/usage.py
-- `test_the_table_names_the_stage_the_model_and_the_price()` --uses--> `Ledger`  [INFERRED]
-  tests/eval/test_economics.py → src/agent/usage.py
+- `main()` --uses--> `Lane`  [INFERRED]
+  evals/economics.py → src/agent/dataset.py
+- `main()` --uses--> `ProposalError`  [INFERRED]
+  evals/economics.py → src/agent/gateway.py
+- `main()` --uses--> `ScoringError`  [INFERRED]
+  src/agent/cli.py → evals/harness.py
 
 ## Import Cycles
 - None detected.
 
-## Communities (155 total, 46 thin omitted)
+## Communities (113 total, 15 thin omitted)
 
-### Community 0 - "SeededClock"
-Cohesion: 0.09
-Nodes (20): datetime, A deterministic clock. Time moves because the simulation says so., The current simulated time., Move simulated time forward and return the new time., SeededClock, An arrival numbered before the last one is out of order, not a new arrival., Append-only is structural: there is no update, delete or reorder., Each arrival is stamped by the clock, one tick apart. (+12 more)
+### Community 0 - "GraphSession"
+Cohesion: 0.12
+Nodes (17): Command, GraphError, GraphOutcome, GraphSession, Any, RuntimeError, What resuming a held decision did, or why the answer could not be used., One lane, one compiled graph, one checkpoint thread per decision. Holding the… (+9 more)
 
 ### Community 1 - "policy.py"
-Cohesion: 0.09
-Nodes (34): RoutingRequest, mail_risk(), What a mail makes likely, from signals the pipeline already computed. An unsure…, Decision, GoldPolicy, named_route(), _params_with_case(), ProposalPolicy (+26 more)
+Cohesion: 0.11
+Nodes (27): mail_risk(), What a mail makes likely, from signals the pipeline already computed. An unsure…, Case, One dataset row: its lane, its canonical event, its labels and the raw record., Whether this case carries the dataset's answer at all., email_context_for(), floor_verdict_for(), GoldPolicy (+19 more)
 
 ### Community 2 - "graph.py"
 Cohesion: 0.10
-Nodes (41): CompiledStateGraph, langgraph_graph, langgraph_graph_state, langgraph_types, authorize(), _authorized_settled(), _bound(), build_graph() (+33 more)
+Nodes (43): CompiledStateGraph, langgraph_graph, langgraph_graph_state, langgraph_types, authorize(), _authorized_settled(), _bound(), build_graph() (+35 more)
 
-### Community 3 - "run_eval.py"
-Cohesion: 0.10
-Nodes (29): CalibrationReport, The lane the user sat in front of: what they typed, and what it cost them., Lines the user typed: answers to a prompt, and corrections after one., Raised when a run cannot be scored as asked, rather than scored wrongly., Join the two lanes into the report, refusing a pair that cannot be one run., ScoringError, two_lane_report(), EvalOutcome (+21 more)
+### Community 3 - ".prepare"
+Cohesion: 0.14
+Nodes (15): _brief(), _digest(), _notify_text(), _params_brief(), Any, Work out the steps for a decision, validating every one, mutating nothing., A step that validated, or a recorded complaint about why it could not., Every step carries the ids, so one receipt can name the case it came from. (+7 more)
 
 ### Community 4 - "ClaimStore"
-Cohesion: 0.09
-Nodes (39): ClaimStore, The one claims table, and the only way into it. Closed by default: a store with…, Take up the claims already in the store's file, when consent allows their use., The reason this store may not read or write its file at this moment, or ''., How many claims are in memory., Keep a confirmed claim, if there is consent for it. The same claim is kept once., Capability, ConsentRequired (+31 more)
+Cohesion: 0.07
+Nodes (45): _open_store(), The run's memory: the rules already kept, and the file they live in., ClaimStore, The one claims table, and the only way into it. Closed by default: a store with…, Take up the claims already in the store's file, when consent allows their use., Write every claim to the store's file, one JSON object per line. The whole…, The reason this store may not read or write its file at this moment, or ''., How many claims are in memory. (+37 more)
 
-### Community 5 - "test_economics.py"
-Cohesion: 0.11
-Nodes (27): asyncio, MeteredCompletions, provider(), SimpleNamespace, The cost meter: it has to count what was spent, and admit what it cannot price., No call, no tokens, and the deflection is what makes the saving countable., Two tables for one run is how a cost report starts under-reporting., The remembered provider sits between the gateway and the model, and holds no… (+19 more)
+### Community 5 - "Ledger"
+Cohesion: 0.09
+Nodes (30): Ledger, The priced cost. Unpriced rows are excluded, and named by ``unpriced``., A process's spend: every provider call, and every arrival it never had to ask…, One case reached the proposal stage. A deflected one was settled without a call., MeteredCompletions, provider(), SimpleNamespace, The cost meter: it has to count what was spent, and admit what it cannot price. (+22 more)
 
 ### Community 6 - "feedback.py"
-Cohesion: 0.09
-Nodes (38): ClaimScope, datetime, ScopeAnchor, _action_for(), _claim_reading(), _clean_label(), confirm_claim(), confirm_words() (+30 more)
+Cohesion: 0.07
+Nodes (43): _action_for(), _claim_reading(), _clean_label(), confirm_words(), _decision_reading(), FeedbackContext, _from_context(), _narrowed() (+35 more)
 
-### Community 7 - "Manifest"
-Cohesion: 0.10
-Nodes (25): _case_from_row(), Manifest, ManifestError, Build one case, naming the case on anything the row gets wrong. A bare…, Every case in the dataset, sorted by sequence index, with its digest.…, Build a manifest from parsed rows, rejecting duplicate case ids and splits., Build a manifest from plain mail: sender, recipients, subject and body. A…, Return the lane-bound handle for one lane. (+17 more)
+### Community 7 - "dataset.py"
+Cohesion: 0.06
+Nodes (48): _attachment(), _case_from_mail_row(), _case_from_row(), CaseLabels, event_from_row(), ManifestError, _message(), Any (+40 more)
 
 ### Community 8 - "Bucket"
 Cohesion: 0.10
 Nodes (25): Random, The confirmed rule that refused this arm, or '' when the user has not refused…, BetaStore, Bucket, _bucket_from(), Count one observation, at every level of the bucket's chain., One Thompson sample: the number an arm is compared with., Every level anything has been counted about, most evidential first. (+17 more)
 
-### Community 9 - "test_feedback_parser.py"
-Cohesion: 0.11
-Nodes (31): preference_for(), The scoped preference a confirmed rule would leave behind for this sender.…, ClaimType, StrEnum, What kind of thing the user told us. Each still needs its evidence., How the claim's scope was arrived at, which is what its confidence means., ScopeAnchor, The constrained feedback parser, the scope echo, and what a claim has to be to… (+23 more)
-
-### Community 10 - "ActionPayload"
-Cohesion: 0.08
-Nodes (36): ActionPayload, floor_check(), Standardized representation of a candidate tool action., Evaluate a proposed action against the deterministic safety floor. Returns the…, FLR-001: Financial transactions in action params must escalate., FLR-001: Money requests in email body cannot trigger non-reversible actions., FLR-002: Credential or authentication modification must escalate., FLR-003: Unrecognized tool calls must be escalated. (+28 more)
-
-### Community 11 - "ClaimScope"
-Cohesion: 0.12
-Nodes (25): claim_id_for(), ClaimScope, A stable id for the same claim said twice, so it is never stored twice., Where a claim applies: the axes the learner's buckets are built from., Whether the claim names anything narrower than the whole mailbox., A stable key for the claim's scope, for ids and later comparison., memory(), preference() (+17 more)
-
-### Community 12 - "runner.py"
-Cohesion: 0.06
-Nodes (42): Bucket, Claim, Decision, FeedbackContext, Reading, ReplyTree, _address(), _body_lines() (+34 more)
-
-### Community 13 - "EmailContext"
+### Community 9 - "ScopeAnchor"
 Cohesion: 0.13
-Nodes (24): ActionClass, EmailContext, _eval_credential_security(), _eval_injection_tripwires(), _eval_irreversible_external(), _eval_mass_send(), _eval_money_movement(), _eval_permanent_deletion() (+16 more)
+Nodes (30): confirm_claim(), Read the user's answer to the scope echo: the claim to store, or None for no., ClaimType, StrEnum, What kind of thing the user told us. Each still needs its evidence., How the claim's scope was arrived at, which is what its confidence means., ScopeAnchor, The constrained feedback parser, the scope echo, and what a claim has to be to… (+22 more)
+
+### Community 10 - "floor_check"
+Cohesion: 0.09
+Nodes (24): floor_check(), Evaluate a proposed action against the deterministic safety floor. Returns the…, FLR-001: Financial transactions in action params must escalate., FLR-002: Credential or authentication modification must escalate., A single external recipient is an external send, not a mass send., A reversible action leaves the full arm set for the learned policy., An external send cannot be silent or notified: ask or escalate only., A deferred external send is fenced exactly like an immediate one. (+16 more)
+
+### Community 11 - "test_claim_schema.py"
+Cohesion: 0.15
+Nodes (22): ClaimError, ValueError, Raised when a claim is underspecified, or about something never stored., _require_text(), memory(), preference(), parametrize, One claim as the parser hands it over: a class of mail, and the words that said… (+14 more)
+
+### Community 12 - "ChatRunner"
+Cohesion: 0.16
+Nodes (14): Decision, What the simulator does with one arrival., _bucket_of(), ChatRunner, Drive a lane through the chat loop: arrivals on one task, input on another., Deliver every case in the lane, window by window, in the order the seed drew., Prepare the decision's steps, authorize them, and commit what may run.…, Ask the one bounded question and store the rule only if it is confirmed. (+6 more)
+
+### Community 13 - "ActionPayload"
+Cohesion: 0.11
+Nodes (26): ActionPayload, EmailContext, _eval_injection_tripwires(), _eval_irreversible_external(), _eval_permanent_deletion(), _eval_unknown_tool(), Standardized representation of a candidate tool action., Email metadata and body context passed into safety evaluations.… (+18 more)
 
 ### Community 14 - "Handler"
-Cohesion: 0.14
-Nodes (11): BaseHTTPRequestHandler, WAJO Calibration UI, Handler, Any, Silence the per-request log: the page polls, and the terminal stays readable., The page, its assets, and the four calls it makes back., Begin a run from the form the page sent., Hand a typed line to the run that is waiting for one. (+3 more)
+Cohesion: 0.22
+Nodes (8): BaseHTTPRequestHandler, WAJO Calibration UI, Handler, Any, Silence the per-request log: the page polls, and the terminal stays readable., The page, its assets, and the four calls it makes back., Begin a run from the form the page sent., What the page's side panel shows: what the run did and what it now knows.
 
-### Community 15 - "Session"
+### Community 15 - "_server"
+Cohesion: 0.33
+Nodes (7): _call(), Any, Path, The real handler on a free port, imported the way the entry point runs it., One call to the page's server: a body makes it a POST, no body a GET., _server(), test_the_page_is_served_and_can_drive_a_session()
+
+### Community 16 - "test_graph_state.py"
+Cohesion: 0.22
+Nodes (13): message(), Path, The body and subject are inputs to the decision, and must not reach the file., No line may contain these words, in a key or in a value., Error handling at the boundary: a path that is not a file names itself., The run that dies is the one worth tracing, so lines are flushed as written., test_a_long_text_is_a_digest_and_a_short_one_is_not(), test_a_secret_shaped_field_is_never_written() (+5 more)
+
+### Community 17 - "HeldOutReport"
 Cohesion: 0.08
-Nodes (30): Point the server at a session, which is what the tests and the page both need., set_session(), importlib_util, pytest, Path, One calibration run, driven a line at a time. The run is the one the CLI drives…, Called while a decision is on screen and before its line is read., Session (+22 more)
-
-### Community 16 - "eval_all"
-Cohesion: 0.10
-Nodes (19): main(), Run the lanes, then print what they cost., The pair's name, so a run says where a proposal could have come from., data_validate(), eval_all(), main(), Print what a case set holds and everything wrong with it., Teach the calibration lane, freeze it, and score the sealed lane once. (+11 more)
-
-### Community 17 - "harness.py"
-Cohesion: 0.11
-Nodes (14): ask_curve(), Block, Gate, HeldOutReport, _rate(), The two-lane scorer: what the agent did, counted where it happened. The report…, The interruption curve: how many cases each block of the lane needed the user…, A count and its denominator, which is the only honest way to print a rate. (+6 more)
+Nodes (21): CalibrationReport, EvalReport, Gate, HeldOutReport, Any, Path, _rate(), A count and its denominator, which is the only honest way to print a rate. (+13 more)
 
 ### Community 18 - "test_floor.py"
+Cohesion: 0.07
+Nodes (32): _check_zero_width_chars(), Detect presence of invisible zero-width characters used for steganography., Scan untrusted email content and headers for prompt injection indicators.…, scan(), Unit tests for the deterministic Safety Floor & Prompt Injection Guardrails…, FLR-005: Mass sends (>5 recipients) must require human approval (ASK)., Verify scan() catches direct instruction override attacks., Verify scan() catches prompt leakage and fake audit phishing. (+24 more)
+
+### Community 19 - "injection.py"
+Cohesion: 0.20
+Nodes (11): base64, re, _check_authority_claims(), _check_base64_injection(), _decode_base64_candidate(), _names_its_own_domain(), Prompt injection tripwires and plan-deviation verification. Zero LLM dependence…, Return the decoded text of a base64 candidate, or None when it is not valid… (+3 more)
+
+### Community 20 - "test_gateway.py"
 Cohesion: 0.06
-Nodes (30): Unit tests for the deterministic Safety Floor & Prompt Injection Guardrails…, Verify scan() catches direct instruction override attacks., Verify scan() catches prompt leakage and fake audit phishing., Verify scan() flags invisible zero-width unicode characters., Verify scan() decodes and flags embedded base64 commands., Verify scan() detects external senders claiming internal sensitive roles., An authority claim we cannot tie to a sender address is unresolved, not trusted., An in-org sender claiming an internal role is not an authority spoof. (+22 more)
+Nodes (51): parse_proposal(), The offline provider: proposes from triage, no network, deterministic. It is a…, Validate one provider answer. Anything unexpected is an error, not a default., RuleProvider, A table that hid the rules provider would show a run spending nothing and doing…, test_the_offline_provider_is_counted_and_costs_nothing(), BrokenProvider, message() (+43 more)
 
-### Community 20 - "GraphSession"
-Cohesion: 0.15
-Nodes (14): Command, GraphError, GraphSession, Any, RuntimeError, What resuming a held decision did, or why the answer could not be used., One lane, one compiled graph, one checkpoint thread per decision. Holding the…, Walk the lane, holding at every decision that needs a human. (+6 more)
-
-### Community 21 - "EventValidationError"
-Cohesion: 0.18
-Nodes (10): DuplicateEventError, EventValidationError, OutOfOrderEventError, ValueError, Raised when a canonical event violates the schema., Raised when a stream carries the same case or message twice., Raised when a stream is not in ascending sequence order., Who an email claims to come from, and whether that claim is verified.… (+2 more)
+### Community 21 - "Tool"
+Cohesion: 0.20
+Nodes (7): ABC, ArchiveEmail, Files a message out of the inbox., One capability. Small on purpose: check refuses, apply acts., Refuse parameters this tool cannot act on. Called at prepare time., Do the work and say what changed. Only ever called by a commit., Tool
 
 ### Community 22 - "test_sim.py"
-Cohesion: 0.23
-Nodes (17): build_reply_tree(), Reconstruct the reply tree for a thread, bounded by depth and node caps.…, decision_sources(), message(), Phase 3.4: the chat simulator, its CLI and bounded reply-tree reconstruction., Which decision source produced the routes in a labelled run., A minimal message for tree tests; ``minutes=None`` means no timestamp., test_bad_caps_and_empty_threads_are_rejected() (+9 more)
+Cohesion: 0.15
+Nodes (23): build_reply_tree(), _order_key(), _ordered_roots(), Every thread root, asked-for first, the rest in a deterministic order. A root…, A total order over messages: dated first, then undated, then by id. Thread…, Reconstruct the reply tree for a thread, bounded by depth and node caps.…, decision_sources(), message() (+15 more)
 
 ### Community 23 - "test_sim_tools.py"
 Cohesion: 0.15
 Nodes (27): mailbox(), prepare(), Phase 3.3: the simulated tools and the prepare/authorize/commit contract. The…, The digest covers the steps, so approving one label never approves another., A draft with no body is a blocked step on the receipt, not a silent no-op., One vocabulary: a dataset action id either names a tool or has none on purpose., The goal: point it at sender, subject and body, and nothing else., A tool takes mail, not a case: the same call works for any message. (+19 more)
 
 ### Community 24 - "Effect"
-Cohesion: 0.17
-Nodes (12): ArchiveEmail, _email_id(), LabelEmail, Any, Files a message out of the inbox., A send that validates like a real one and never leaves the mailbox. Recipients…, Applies one label to one message., SendEmail (+4 more)
+Cohesion: 0.16
+Nodes (13): CreateDraft, _email_id(), LabelEmail, Any, Writes a private draft. Reversible, and never a send., A send that validates like a real one and never leaves the mailbox. Recipients…, Applies one label to one message., SendEmail (+5 more)
 
 ### Community 25 - "test_draft_validation.py"
+Cohesion: 0.13
+Nodes (32): DraftCode, Predraft, StrEnum, A reply, written but not sent, with its facts and its gaps. The case id rides…, The draft as a human should see it before approving anything., Why a draft may not be shown, as a code a test and a transcript can name., Everything the draft may state without inventing it: the mail, and its thread., Whether this draft may be shown. Fixed order, and the first refusal is the… (+24 more)
+
+### Community 26 - ".render"
+Cohesion: 0.12
+Nodes (10): _money(), _percent(), Most-spending stage first, so the table reads as a ranking., The per-stage table, under it the deflection line, and what the run cost per…, Say what the money figure covers, so an unpriced model cannot hide in a total.…, A cost, or ``n/a`` for a model nobody publishes a rate for., One row: what one stage spent with one model., The estimated cost, or None when this model has no published rate. A call that… (+2 more)
+
+### Community 27 - "ProposalError"
 Cohesion: 0.14
-Nodes (29): DraftCode, Predraft, A reply, written but not sent, with its facts and its gaps. The case id rides…, The draft as a human should see it before approving anything., Why a draft may not be shown, as a code a test and a transcript can name., Whether this draft may be shown. Fixed order, and the first refusal is the…, validate_draft(), StrEnum (+21 more)
+Nodes (17): build_provider(), ProposalError, RuntimeError, Raised when a provider cannot produce a usable proposal, after one repair., Ask once. A provider that fails in any way is a failed proposal, not a crash. A…, Resolve a provider by name, refusing one that cannot run here. The model comes…, fake_client(), FakeCompletions (+9 more)
 
-### Community 26 - "Ledger"
-Cohesion: 0.09
-Nodes (13): The offline provider: proposes from triage, no network, deterministic. It is a…, RuleProvider, Ledger, The priced cost. Unpriced rows are excluded, and named by ``unpriced``., Most-spending stage first, so the table reads as a ranking., One row: what one stage spent with one model., The estimated cost, or None when this model has no published rate. A call that…, A process's spend: every provider call, and every arrival it never had to ask… (+5 more)
-
-### Community 27 - "test_gateway.py"
-Cohesion: 0.08
-Nodes (41): MonkeyPatch, build_provider(), ProposalError, ProposalGateway, Raised when a provider cannot produce a usable proposal, after one repair., Turns provider text into a validated proposal, with one repair attempt., Resolve a provider by name, refusing one that cannot run here. The model comes…, BrokenProvider (+33 more)
-
-### Community 28 - "agent/state.py"
-Cohesion: 0.08
-Nodes (35): Drafting, Routing, The chosen route's expected loss, in handoffs., Record the route the router chose, which is what authorization checks., route(), One line per decision, and one per reply: ids, hashes, bounded records., draft_fields(), hint_fields() (+27 more)
+### Community 28 - "state"
+Cohesion: 0.11
+Nodes (26): One line per decision, and one per reply: ids, hashes, bounded records., draft_fields(), hint_fields(), message_digest(), _plain(), prepared_fields(), Any, The router's decision, as traceable fields: bounded, scalar, and re-readable. (+18 more)
 
 ### Community 29 - "app.js"
 Cohesion: 0.21
 Nodes (23): action(), api(), attach(), CHOICES, clean(), el(), parseMail(), placeDraft() (+15 more)
 
-### Community 30 - "ProposalRequest"
-Cohesion: 0.12
-Nodes (12): Protocol, ProposalProvider, ProposalRequest, Everything a provider is allowed to see: the mail, plus what triage inferred., The request rendered for a text model. The mail is the only input., A source of untrusted proposal text., Return raw proposal text for one request., Ask once. A provider that fails in any way is a failed proposal, not a crash. A… (+4 more)
+### Community 30 - "VetoLevel"
+Cohesion: 0.20
+Nodes (10): _mask_routes(), Veto severity level returned by floor_check. When veto is True, router directly…, Drop every route the floor forbade, so the learner never sees them as options., VetoLevel, FLR-003: Unrecognized tool calls must be escalated., FLR-004: Irreversible external sends must require human approval (ASK)., FLR-006: Permanent deletion of mailbox items cannot occur autonomously., test_flr_003_unrecognized_tool() (+2 more)
 
 ### Community 31 - "drafts.py"
-Cohesion: 0.09
-Nodes (26): Case, draft_reply(), Drafting, drafting_for(), FactSource, _first_name(), _flatten(), open_questions() (+18 more)
+Cohesion: 0.10
+Nodes (25): draft_reply(), FactSource, _first_name(), _flatten(), open_questions(), Picked, Predrafts for the ASK route (Phase 7). An ask is only worth the interruption if…, One example that fits the budget, and why it was the one kept. (+17 more)
 
-### Community 32 - "agent/triage.py"
-Cohesion: 0.13
-Nodes (18): Message, One email message, in a thread, in one direction., A reconstructed thread: its roots, plus every message's children by parent id.…, The direct replies to one message, in expansion order., Depth-first order over the reconstructed thread, asked-for root first., ReplyTree, _first_intent(), intents_matching() (+10 more)
+### Community 32 - "ReplyTree"
+Cohesion: 0.14
+Nodes (15): A reconstructed thread: its roots, plus every message's children by parent id.…, The direct replies to one message, in expansion order., Depth-first order over the reconstructed thread, asked-for root first., ReplyTree, _body_lines(), _prior_lines(), Reconstruct one case's thread, bounded by the reply-tree caps., The arriving mail the way an inbox shows it. Sender, recipients, subject, body… (+7 more)
 
 ### Community 33 - "test_predrafts.py"
-Cohesion: 0.13
-Nodes (23): drafting(), held(), Case, Path, Phase 7.2: the predraft an ask carries - facts cited, gaps exposed, nothing…, End to end through the real contract: prepare, authorize, commit one draft., A reply the user cannot trust is worse than a mail handed back., A draft is mail text: the record keeps its shape, sizes and labels, not its… (+15 more)
+Cohesion: 0.12
+Nodes (24): Drafting, A draft, what it read, and whether it may be shown., drafting(), held(), Path, Phase 7.2: the predraft an ask carries - facts cited, gaps exposed, nothing…, End to end through the real contract: prepare, authorize, commit one draft., A reply the user cannot trust is worse than a mail handed back. (+16 more)
 
-### Community 34 - "RoutingRequest"
-Cohesion: 0.15
-Nodes (9): Posterior, One estimate: the counts the store holds, with the prior folded in., The probability the user approves of this, before any sampling., How much has been counted at the answering level, in units of feedback., Whether this route is on the ballot at all: the cautious ones always are., Everything the router is allowed to consider for one arrival., RoutingRequest, Nobody has said anything anywhere: silence is not on the ballot and asking wins. (+1 more)
+### Community 34 - "Posterior"
+Cohesion: 0.29
+Nodes (4): Posterior, One estimate: the counts the store holds, with the prior folded in., The probability the user approves of this, before any sampling., How much has been counted at the answering level, in units of feedback.
 
 ### Community 35 - "Learner"
-Cohesion: 0.09
-Nodes (38): is_approving(), Learner, How many explicit decisions have been counted into a posterior., How many arms the user has refused outright., Whether this reading is a vote for the agent acting on its own., Keep the refusal, with the scope the rule was confirmed for rather than this…, Whether this reading is a vote for the agent acting on its own. The route a…, Counts what the user said into posteriors, once per event, never from silence.… (+30 more)
+Cohesion: 0.07
+Nodes (50): is_approving(), Learner, How many explicit decisions have been counted into a posterior., How many arms the user has refused outright., Whether this reading is a vote for the agent acting on its own., Keep the refusal, with the scope the rule was confirmed for rather than this…, Whether this reading is a vote for the agent acting on its own. The route a…, Counts what the user said into posteriors, once per event, never from silence.… (+42 more)
 
 ### Community 36 - "test_replay.py"
-Cohesion: 0.08
-Nodes (32): fixture, Lane, Where a case sits relative to learning., manifest(), Unit tests for deterministic replay and the split firewall (Phase 3.2). Covers:…, Counts per split and per lane, with the dataset's real sizes., A replay can name the exact dataset it ran against., Ground truth has to be reachable by scoring and out of reach of a decision. (+24 more)
-
-### Community 37 - "session.py"
-Cohesion: 0.09
-Nodes (17): AbstractEventLoop, AnswerQueue, _background_loop(), Block, classify(), Any, LaneView, Load the lane and begin the run. A failure here is the caller's to report. (+9 more)
+Cohesion: 0.04
+Nodes (59): hashlib, json, pytest, EventStream, _json_default(), Any, datetime, Seeded clock and append-only event stream (Phase 3.2). Replay has to be… (+51 more)
 
 ### Community 38 - "mask_for_llm"
-Cohesion: 0.15
-Nodes (17): mask_for_llm(), Sanitize subject and body before any model call. Returns masked text only., Unit tests for Presidio PII Masker (Phase 2)., The masking API hands back masked text only; the reverse map is opt-in., Retention is explicit: a forgotten thread keeps no raw values in memory., Verify common PII entities (email, phone, person, location) are masked., Verify Indian PAN, Aadhaar, and Passport numbers are masked., Verify project codenames and ticket IDs are masked. (+9 more)
+Cohesion: 0.10
+Nodes (27): PII masking and anonymization package., forget_thread(), get_token_map(), mask_for_llm(), Access or initialize the singleton PresidioMasker., Sanitize subject and body before any model call. Returns masked text only., Retrieve the current token to original value map for a thread., Drop a thread's token registry and reverse map. (+19 more)
 
-### Community 39 - "PresidioMasker"
-Cohesion: 0.16
-Nodes (10): PresidioMasker, Warm singleton wrapper around Presidio Analyzer and Per-Thread Registry., Return a thread's registries, evicting the oldest thread past the cap., Drop a thread's tokens and reverse map; returns whether it existed., Count distinct tokens already handed out for one entity type., Deduplicate person names: match aliases, first names, and full names to one…, Assign or retrieve a consistent <TYPE_N> token for an entity value within a…, Mask PII entities in text with consistent <TYPE_N> tokens. (+2 more)
+### Community 39 - "masker.py"
+Cohesion: 0.07
+Nodes (28): AnalyzerEngine, EntityRecognizer, presidio_analyzer, presidio_analyzer_nlp_engine, presidio_anonymizer, RecognizerResult, _build_custom_recognizers(), _clean_person_name() (+20 more)
 
-### Community 40 - "_split_problems"
+### Community 40 - "Session"
+Cohesion: 0.13
+Nodes (20): importlib_util, One calibration run, driven a line at a time. The run is the one the CLI drives…, Called while a decision is on screen and before its line is read., Session, A choice the page must not offer: nothing the user says takes this one off the…, The ask is for the user to edit: the reply, its facts and its gaps arrive…, Poll a session the way the page does, so a slow line fails as one readable…, The run writes the summary a line at a time; the page has to read it as one… (+12 more)
+
+### Community 41 - "run_typed"
+Cohesion: 0.11
+Nodes (30): arrivals(), block_of(), dataset_routes(), labelled_routes(), DecisionSource, The case ids of the arrival blocks, in the order they were printed., The route the pipeline chose for each arrival, in order., The dataset's route for each arrival, which only the label view prints. (+22 more)
+
+### Community 42 - "email_tools.py"
 Cohesion: 0.22
-Nodes (10): DatasetProblem, One thing the case set gets wrong, named so it can be found and fixed., Read a dotted path out of a row, or the default when any step is absent., The scenario a rule would be scoped to: who sent it, and about what. Sender…, Check one row's fields and enums. Returns its problems and its warnings., The cross-row checks: ids and ordering, and nothing landing in two lanes., _row_problems(), _scenario() (+2 more)
-
-### Community 41 - "arrivals"
-Cohesion: 0.15
-Nodes (19): arrivals(), dataset_routes(), labelled_routes(), The case ids of the arrival blocks, in the order they were printed., The route the pipeline chose for each arrival, in order., The dataset's route for each arrival, which only the label view prints., The eval curve is built from these two, so they have to be the run's own record., The plan's check, against the labels: only ask-first and escalate lines wait. (+11 more)
-
-### Community 42 - "SimulatedMailbox"
-Cohesion: 0.22
-Nodes (4): CreateDraft, Writes a private draft. Reversible, and never a send., Everything a commit can change, and nothing a prepare can., SimulatedMailbox
+Nodes (7): action_vocabulary(), Draft, The simulated email tools (Phase 3.3). Six tools over one in-memory mailbox:…, What a proposer may ask for, and what each action needs, as prompt lines., A private draft. Preparation, not sending., Read-only: returns the message it was pointed at., ReadEmail
 
 ### Community 43 - "claims.py"
-Cohesion: 0.10
-Nodes (23): enum, _action_words(), _bears_on(), Claim, _claim_from_record(), _claim_record(), ClaimError, Any (+15 more)
+Cohesion: 0.13
+Nodes (19): _action_words(), _bears_on(), Claim, _claim_from_record(), claim_id_for(), _claim_record(), Any, datetime (+11 more)
 
-### Community 44 - "Case"
-Cohesion: 0.08
-Nodes (38): Case, CaseLabels, The dataset's ground truth for a case. These are answers: what the case was…, One dataset row: its lane, its canonical event, its labels and the raw record., Whether this case carries the dataset's answer at all., The dataset's answer for this case, for scoring and debugging only., Streaming inbox simulator: arrival schedule, chat loop and reply-tree…, _dependencies_first() (+30 more)
+### Community 44 - "schedule"
+Cohesion: 0.12
+Nodes (27): _dependencies_first(), dependencies_of(), Any, RuntimeError, Raised when a case names a dependency no window can deliver before it., The ids a case says must arrive before it, from…, Cut a lane into ordered windows, shuffling only inside each one., Every case in the order the windows will deliver them. (+19 more)
 
 ### Community 45 - "main"
-Cohesion: 0.32
-Nodes (8): CaptureFixture, main(), Run both lanes and print the report, so the scorer can be read before it is…, test_cli_refuses_to_open_the_sealed_lane(), test_cli_replays_the_fixture(), test_cli_requires_a_subcommand(), test_cli_seed_flag_changes_the_replay_digest(), test_cli_show_labels_flag_is_off_by_default()
+Cohesion: 0.15
+Nodes (17): data_validate(), main(), Print what a case set holds and everything wrong with it., Entry point for the ``wajo`` console script., The plan's exit gate: `wajo data validate <path>` prints and returns a status., test_the_command_exits_zero_on_the_case_set_and_nonzero_on_a_broken_one(), CaptureFixture, MonkeyPatch (+9 more)
 
 ### Community 46 - "LaneView"
-Cohesion: 0.14
-Nodes (8): RuntimeError, LaneView, Raised when code reaches across the learning/held-out firewall., A lane-bound handle over the manifest. A view can only open cases in its own…, Open one case from this lane. Refuses any other lane's case., Whether this lane may update the learner., Refuse a learner write from a lane that is not allowed to teach., SplitViolation
+Cohesion: 0.08
+Nodes (16): LaneView, RuntimeError, Raised when code reaches across the learning/held-out firewall., Return the lane-bound handle for one lane., A lane-bound handle over the manifest. A view can only open cases in its own…, The lane's arriving events, in sequence order., Open one case from this lane. Refuses any other lane's case., Whether this lane may update the learner. (+8 more)
 
 ### Community 47 - "test_triage.py"
 Cohesion: 0.14
-Nodes (16): amount_in(), The largest amount mentioned in a text, as a float., message(), Deterministic pre-triage: mail-only, deterministic, and measured against the…, An AWS invoice says a payment is due; it is still a bill, not a wire request., The classifier's input is a Message, so a label cannot be an input. Feeding it…, test_a_cloud_invoice_is_not_read_as_a_payment_request(), test_a_known_sender_wins_over_every_marker() (+8 more)
+Nodes (17): guesses(), manifest(), message(), fixture, Deterministic pre-triage: mail-only, deterministic, and measured against the…, An AWS invoice says a payment is due; it is still a bill, not a wire request., The classifier's input is a Message, so a label cannot be an input. Feeding it…, test_a_cloud_invoice_is_not_read_as_a_payment_request() (+9 more)
 
 ### Community 48 - "test_graph_resume.py"
-Cohesion: 0.09
-Nodes (30): parametrize, approval_for(), Crash, Crashing, Flaky, Message, Proposal, ProposalGateway (+22 more)
+Cohesion: 0.23
+Nodes (15): approval_for(), The provider answers differently on the second look: the yes no longer fits., A yes is not an answer where the floor sent it to a human to decide., The effect log is what makes a retry safe: a second commit returns the same…, The yes a reviewer would send back for the work they were shown., session(), test_a_crash_before_the_work_ran_leaves_the_decision_waiting(), test_a_decision_that_moved_between_asking_and_answering_is_refused() (+7 more)
 
 ### Community 49 - "retrieve_style"
-Cohesion: 0.16
-Nodes (21): estimate_tokens(), Picked, A rough token count for a budget decision, not for a bill., One example that fits the budget, and why it was the one kept., The few sent replies a draft may learn from: same person, then same intent,…, retrieve_style(), example(), Phase 7.1: retrieving the few sent replies a draft may learn from. (+13 more)
+Cohesion: 0.18
+Nodes (19): estimate_tokens(), A rough token count for a budget decision, not for a bill., The few sent replies a draft may learn from: same person, then same intent,…, retrieve_style(), example(), Phase 7.1: retrieving the few sent replies a draft may learn from., One sent reply, from the mailbox's own history., A reply the user sent this person beats an older one to anybody else. (+11 more)
 
 ### Community 50 - "Routes"
 Cohesion: 0.22
 Nodes (8): Routes, Silence is not approval, The one-unit loss matrix, The order the router applies, The safety floor decides who is on the ballot, What an ask carries, Worked example: the ambiguous refund, Worked example: the AWS invoice
 
-### Community 51 - "run_typed"
-Cohesion: 0.17
-Nodes (13): DecisionSource, Path, TraceSink, Sender, subject and body are inputs in production; labels are only answers.…, On a real run: one line per arrival, and no mail text in any of them., Replay the fixture, typing ``typed`` at the given interrupt numbers. Lines…, run_typed(), test_a_traced_run_writes_the_decision_and_never_the_mail() (+5 more)
+### Community 51 - "TraceSink"
+Cohesion: 0.25
+Nodes (6): Append-only JSONL trace, one line per decision, flushed as it is written., Close the file. Safe to call twice, which an except-block may do., TraceSink, Path, On a real run: one line per arrival, and no mail text in any of them., test_a_traced_run_writes_the_decision_and_never_the_mail()
 
 ### Community 52 - "test_graph.py"
-Cohesion: 0.11
-Nodes (28): langgraph_checkpoint_memory, GraphOutcome, LaneView, ProposalGateway, Router, SimulatedMailbox, TraceSink, Walk a lane through the graph, one decision per checkpoint thread. (+20 more)
+Cohesion: 0.18
+Nodes (19): langgraph_checkpoint_memory, Walk a lane through the graph, one decision per checkpoint thread., run_graph(), CaptureFixture, MonkeyPatch, Path, The graph is not a second opinion: same proposals, same route, same receipts., runtime() (+11 more)
 
-### Community 53 - "ContextPhoneRecognizer"
-Cohesion: 0.17
-Nodes (9): EntityRecognizer, RecognizerResult, _build_custom_recognizers(), ContextPhoneRecognizer, ContextSSNRecognizer, Any, Build custom recognizers for domain entities, regional IDs, and robust phones., Detects phone numbers accurately, extracting only the digit span. (+1 more)
+### Community 53 - "Routing"
+Cohesion: 0.25
+Nodes (5): What the router considered, which every canonical run keeps., The route chosen, and everything that was ruled out on the way., The chosen route's expected loss, in handoffs., One line for a transcript or a reason. Deliberately terse: a trace digests a…, Routing
 
 ### Community 54 - "OpenAICompatibleProvider"
-Cohesion: 0.17
-Nodes (8): Endpoint, OpenAICompatibleProvider, An OpenAI-compatible endpoint's settings., How a run reports which model it used., A model behind an OpenAI-compatible API. Used only when a key is configured., Which model a run is actually talking to., A client for this endpoint. Imported here so offline runs need no SDK., Ask the model for one proposal, off the event loop.
+Cohesion: 0.13
+Nodes (13): _attribute(), Endpoint, OpenAICompatibleProvider, Any, An OpenAI-compatible endpoint's settings., How a run reports which model it used., A model behind an OpenAI-compatible API. Used only when a key is configured., Which model a run is actually talking to. (+5 more)
 
-### Community 55 - "registry.py"
+### Community 55 - "runner.py"
 Cohesion: 0.07
-Nodes (39): Simulated tools and the prepare/authorize/commit contract a real adapter will…, Approval, ApprovalRequired, Authorization, AuthorizationRefused, _brief(), _digest(), _notify_text() (+31 more)
+Nodes (44): collections_abc, dataclasses, enum, Canonical versioned events (Phase 3.1). SenderIdentity, Attachment, Message,…, Safety Floor — Pure-function deterministic guardrails. FLOOR_VERSION = "1.0"…, Bounded reply-tree reconstruction (Phase 3.4). Thread history arrives flat and…, _address(), Concurrent chat-style simulator loop (Phase 3.4, arrivals scheduled by 3.5).… (+36 more)
 
-### Community 56 - ".load"
-Cohesion: 0.20
-Nodes (10): Load the manifest from a JSONL dataset file, or from plain mail rows., test_a_missing_fixture_is_reported_not_raised_raw(), block_of(), interrupting_case_ids(), One arrival's text, from its header up to the next arrival., Fixture cases whose gold route asks the user, in delivery order., test_a_correction_typed_at_a_prompt_binds_to_that_decision(), test_a_reply_prompt_is_reported_for_the_case_that_waits() (+2 more)
+### Community 56 - "NotifyUser"
+Cohesion: 0.29
+Nodes (4): Notification, NotifyUser, Tells the user what happened. Local to the assistant, so the floor treats it as…, A message to the user's own assistant, never to anyone else.
 
 ### Community 57 - "run_canonical.py"
-Cohesion: 0.06
-Nodes (37): cold_control(), main(), one_case_view(), The four reference cases, run end to end and printed as transcripts. Each case…, What the same arrival gets with no preference in force and no trust behind it.…, Run one reference case through the pipeline, with nobody at the keyboard. Input…, One transcript: the mail, the decision, and the numbering behind it., The four routes side by side, which is the check the plan asks for. (+29 more)
+Cohesion: 0.12
+Nodes (22): cold_control(), main(), one_case_view(), preference_for(), The four reference cases, run end to end and printed as transcripts. Each case…, The scoped preference a confirmed rule would leave behind for this sender.…, What the same arrival gets with no preference in force and no trust behind it.…, Run one reference case through the pipeline, with nobody at the keyboard. Input… (+14 more)
 
 ### Community 58 - "EffectLog"
 Cohesion: 0.20
 Nodes (4): EffectLog, What each step of each prepared action has already done. Keyed by the prepared…, One step of one exact action: the same digest and position is the same work., What this step did, if it already ran.
 
-### Community 59 - "SentExample"
-Cohesion: 0.12
-Nodes (16): examples_from_row(), How many examples this case allows. The row's ``needs_draft`` is deliberately…, What style the draft may borrow, and how the archive was narrowed to it., What the kept examples cost, in the same rough unit as the cap., One line naming what was kept and why, for a transcript., The word the user opens with, borrowed from the best example and cited as such., One reply the user actually sent, consented for style., Read one example from the shape a mailbox hands over. (+8 more)
+### Community 59 - "drafting_for"
+Cohesion: 0.17
+Nodes (12): drafting_for(), examples_from_row(), Any, How many examples this case allows. The row's ``needs_draft`` is deliberately…, The tool arguments that carry this draft. It is addressed to whoever wrote., Retrieve, write and check one draft for one mail., One reply the user actually sent, consented for style., Read one example from the shape a mailbox hands over. (+4 more)
 
-### Community 60 - "FakeCompletions"
-Cohesion: 0.40
-Nodes (4): fake_client(), FakeCompletions, SimpleNamespace, The slice of the OpenAI client the provider uses, capturing the request.
-
-### Community 61 - "Thread"
-Cohesion: 0.22
-Nodes (9): A conversation: the messages that arrived before this case, oldest first., Thread, EmailEvent, History cannot smuggle a message that belongs to a different thread., History ids are unique, even though the dataset reuses them across cases., The arriving message and the thread it is attached to must agree., test_event_rejects_a_message_that_does_not_belong_to_its_thread(), test_thread_rejects_a_message_from_another_thread() (+1 more)
-
-### Community 62 - "Any"
-Cohesion: 0.20
-Nodes (17): Any, _entries(), freeze(), load(), Learner, Path, Router, Freezing what a run learned, so the next one starts where it stopped. Three… (+9 more)
+### Community 61 - "SimError"
+Cohesion: 0.67
+Nodes (3): RuntimeError, Raised when a run cannot continue, naming the case it stopped on., SimError
 
 ### Community 63 - "gateway.py"
-Cohesion: 0.12
-Nodes (28): Message, os, _attribute(), _label_derived(), label_for(), _mail_rules(), _persona_checked(), persona_demanded_route() (+20 more)
+Cohesion: 0.06
+Nodes (53): os, _domain(), proposal_from(), One claim as a proposal, or None when the claim names no route., Answer from a claim where one bears on this mail, otherwise ask the inner one., What the user's own words amount to for this mail, if anything., The claim's route, with whatever work the inner provider chose for the mail. An…, _with_inner_action() (+45 more)
 
-### Community 64 - "Tool"
+### Community 64 - "ask_curve"
 Cohesion: 0.25
-Nodes (6): ABC, Read-only: returns the message it was pointed at., ReadEmail, One capability. Small on purpose: check refuses, apply acts., Do the work and say what changed. Only ever called by a commit., Tool
+Nodes (6): ask_curve(), Block, The interruption curve: how many cases each block of the lane needed the user…, One block of a lane, in delivery order, and how much of it asked for the user., Blocks are the stream's own order, and four cases at block 12 is one block of…, test_the_curve_blocks_the_lane_in_delivery_order_and_the_last_block_may_be_short()
 
 ### Community 65 - "test_events.py"
 Cohesion: 0.08
-Nodes (41): FeedbackEvent, FeedbackKind, Reject a stream that repeats a case or message, or drifts out of order. Order…, validate_stream(), _event(), _feedback(), _load_dataset(), parametrize (+33 more)
+Nodes (36): DuplicateEventError, EventValidationError, OutOfOrderEventError, ValueError, Reject a stream that repeats a case or message, or drifts out of order. Order…, Raised when a canonical event violates the schema., Raised when a stream carries the same case or message twice., Raised when a stream is not in ascending sequence order. (+28 more)
 
-### Community 66 - "floor.py"
-Cohesion: 0.10
-Nodes (26): base64, re, _eval_plan_deviation(), FloorRule, Safety Floor — Pure-function deterministic guardrails. FLOOR_VERSION = "1.0"…, Representation of an audited, immutable safety floor rule., FLR-INJ-002: Actions deviating from pre-committed plan must be escalated., The least autonomous of these routes, which is the one that wins a… (+18 more)
+### Community 66 - "plan_deviation"
+Cohesion: 0.18
+Nodes (11): _eval_plan_deviation(), FLR-INJ-002: Actions deviating from pre-committed plan must be escalated., plan_deviation(), Any, Verify that a proposed tool action conforms to the pre-committed triage plan.…, When tool is in pre-committed plan, deviation is False., When tool is NOT in pre-committed plan, deviation is True., When email body smuggles a recipient absent from the plan, plan deviation trips. (+3 more)
 
-### Community 67 - "test_cases.py"
-Cohesion: 0.09
-Nodes (48): Path, Check a case set's counts, enums and splits before anything is asked to run it.…, validate_cases(), _codes(), _extra(), Path, The case set's own checks: counts, enums, and nothing in two lanes. ``wajo data…, A thread carries its own history, so a repeat reveals an earlier lane's mail. (+40 more)
+### Community 67 - "validate_cases"
+Cohesion: 0.06
+Nodes (56): CaseReport, DatasetProblem, Path, One thing the case set gets wrong, named so it can be found and fixed., What the case set holds and whatever is wrong with it. ``ok`` is about problems…, The report as a reader sees it: counts first, then what fails., Read a dotted path out of a row, or the default when any step is absent., The scenario a rule would be scoped to: who sent it, and about what. Sender… (+48 more)
 
 ### Community 68 - "test_freeze.py"
-Cohesion: 0.20
-Nodes (14): event(), Learner, Path, Router, The freeze: a learned run has to survive a process, and a bad payload has to be…, A learner and a router that have counted a few real readings., The restored learner has to answer the routing question, not just hold the…, taught() (+6 more)
+Cohesion: 0.23
+Nodes (11): Path, The freeze: a learned run has to survive a process, and a bad payload has to be…, A learner and a router that have counted a few real readings., The restored learner has to answer the routing question, not just hold the…, taught(), test_a_decision_reads_the_same_bucket_the_same_way_after_a_thaw(), test_a_file_that_cannot_be_read_is_named(), test_a_frozen_run_rebuilds_its_posteriors_cutoffs_and_refusals() (+3 more)
 
-### Community 69 - "run_simulation"
+### Community 69 - "Manifest"
 Cohesion: 0.07
-Nodes (47): ClaimStore, DecisionSource, GraphSession, InterruptHook, IO, Learner, Namespace, Queue (+39 more)
+Nodes (44): main(), Run the lanes, then print what they cost., main(), Run both lanes and print the report, so the scorer can be read before it is…, Namespace, The pair's name, so a run says where a proposal could have come from., eval_all(), graph_run() (+36 more)
 
-### Community 71 - "masker.py"
-Cohesion: 0.15
-Nodes (12): AnalyzerEngine, presidio_analyzer, presidio_analyzer_nlp_engine, presidio_anonymizer, PII masking and anonymization package., _clean_person_name(), _create_analyzer(), forget_thread() (+4 more)
-
-### Community 72 - "get_token_map"
-Cohesion: 0.29
-Nodes (7): get_token_map(), Access or initialize the singleton PresidioMasker., Retrieve the current token to original value map for a thread., The thread registry evicts the oldest entry instead of growing without limit., Verify unmask_text restores original values accurately., test_thread_registry_is_bounded(), test_unmasking()
-
-### Community 73 - "events.py"
-Cohesion: 0.09
-Nodes (36): dataclasses, EmailContext, Direction, StrEnum, Canonical versioned events (Phase 3.1). SenderIdentity, Attachment, Message,…, Which way a message travelled in its thread., email_context_for(), floor_verdict_for() (+28 more)
+### Community 73 - "test_floor_protection.py"
+Cohesion: 0.12
+Nodes (33): approve(), ask_again(), bucket_for(), case(), feedback(), one_case_view(), The floor's second hard requirement, as an executable proof. No posterior, no…, Count `count` approved-then-undone decisions, each worth three rejections. (+25 more)
 
 ### Community 74 - "trace.py"
-Cohesion: 0.08
-Nodes (38): digest_of(), A short stable digest of a text, for a field that must not hold the text., _bounded(), _fingerprint(), Any, datetime, RuntimeError, A nested record: its keys are scrubbed too, since a caller chose them. (+30 more)
+Cohesion: 0.16
+Nodes (20): digest_of(), A short stable digest of a text, for a field that must not hold the text., _bounded(), _fingerprint(), Any, datetime, RuntimeError, A nested record: its keys are scrubbed too, since a caller chose them. (+12 more)
 
-### Community 76 - "CaseReport"
-Cohesion: 0.25
-Nodes (3): CaseReport, What the case set holds and whatever is wrong with it. ``ok`` is about problems…, The report as a reader sees it: counts first, then what fails.
+### Community 76 - "ProposalGateway"
+Cohesion: 0.08
+Nodes (22): Protocol, The user's own words, consulted before the provider. Wraps another provider:…, Whichever provider actually answers, named the way a run names it., How many arrivals a confirmed claim answered., RememberedProvider, _proposing(), The pipeline's proposer: a rule already confirmed answers before the provider…, ProposalGateway (+14 more)
 
 ### Community 77 - "view"
-Cohesion: 0.14
-Nodes (15): ExplodingPolicy, Lane, The lane is delivered window by window, not in the dataset's sequence order., A piped stream has no prompt to answer, so its lines are corrections. Reading…, A decision source that fails, to check the failure names its case., If the read fails, the prompts must see end of input, not wait forever., Fixture case ids in the order the windows deliver them., scheduled_case_ids() (+7 more)
+Cohesion: 0.20
+Nodes (11): ExplodingPolicy, The lane is delivered window by window, not in the dataset's sequence order., A decision source that fails, to check the failure names its case., Fixture case ids in the order the windows deliver them., scheduled_case_ids(), test_a_failing_policy_names_the_case_it_stopped_on(), test_an_arrival_shows_the_mail_a_production_inbox_shows(), test_arrivals_come_in_the_windowed_order_the_seed_recorded() (+3 more)
 
-### Community 79 - "replay"
-Cohesion: 0.17
-Nodes (12): Replay events through a fresh seeded stream., replay(), The plan's check: two same-seed runs emit identical event logs., The seed is load-bearing, so it has to show up in the artifact., One header line, then one parseable line per arrival., The log's order is the dataset's sequence order, not file order., A shuffled file replays identically, because order is sequence_index., test_a_different_seed_changes_the_log() (+4 more)
-
-### Community 80 - "run_loop"
-Cohesion: 0.11
-Nodes (13): LaneView, LoopReport, ClaimStore, ProposalProvider, Calibrate on a lane, then walk the same lane with the rules it produced. Two…, Types scripted lines at the decisions that wait for a human. A line handed over…, One lane, walked with a baseline pipeline and with what the user said during it., Decisions that waited for a human, with nothing remembered yet. (+5 more)
-
-### Community 83 - "test_denominators.py"
+### Community 80 - "test_loop.py"
 Cohesion: 0.09
-Nodes (52): calibration_report(), held_out_report(), Score the calibration lane: the dispositions, the typings and the ask curve., Score the sealed lane, refusing outright if anything about it could teach. Both…, Route, _decision(), _feedback(), _gold() (+44 more)
+Nodes (27): ArgumentParser, build_parser(), The flags both replay paths take: which mail, which lane, who proposes, a trace., The CLI's argument grammar., _replay_flags(), InterruptHook, Queue, Types scripted lines at the decisions that wait for a human. A line handed over… (+19 more)
+
+### Community 83 - "Lane"
+Cohesion: 0.08
+Nodes (59): calibration_report(), dispositions(), held_out_report(), LaneRecord, What one lane run recorded, in the shape the report reads. Built from a chat…, Read a chat run: its per-case routes, what it asked, and what the user typed., Score the calibration lane: the dispositions, the typings and the ask curve., Score the sealed lane, refusing outright if anything about it could teach. Both… (+51 more)
 
 ### Community 88 - "router.py"
-Cohesion: 0.13
-Nodes (25): Costs, Loss, pick(), The cheapest route. Ties go to the more cautious one, so a tie never buys…, Versioned outcome costs, in handoffs. Changing a number means a new version.…, One route's expected loss, and the workings, which are what a receipt records., The expected loss of one route for one mail. ``risk`` holds the probability of…, Score the routes the floor left available, in the order the floor gave them. (+17 more)
+Cohesion: 0.17
+Nodes (21): Costs, Loss, pick(), The cheapest route. Ties go to the more cautious one, so a tie never buys…, Versioned outcome costs, in handoffs. Changing a number means a new version.…, One route's expected loss, and the workings, which are what a receipt records., The expected loss of one route for one mail. ``risk`` holds the probability of…, Score the routes the floor left available, in the order the floor gave them. (+13 more)
 
 ### Community 98 - "Route"
-Cohesion: 0.17
-Nodes (29): The constrained argmin, in the plan's fixed order. Floor mask, then claims,…, Router, The four autonomy outcomes a candidate action can be routed to.…, Route, case(), feedback(), _hints(), The plan's check: the floor is not weighed against a preference, it is applied… (+21 more)
-
-### Community 105 - "replay.py"
 Cohesion: 0.11
-Nodes (15): hashlib, EmailEvent, An email arriving for a case: the unit the graph consumes and replays. Only…, The id of the arriving message., EventStream, _json_default(), Any, Seeded clock and append-only event stream (Phase 3.2). Replay has to be… (+7 more)
+Nodes (37): The constrained argmin, in the plan's fixed order. Floor mask, then claims,…, Choose one route for one arrival., Whether this route is on the ballot at all: the cautious ones always are., Everything the router is allowed to consider for one arrival., Router, RoutingRequest, The four autonomy outcomes a candidate action can be routed to.…, Route (+29 more)
 
-### Community 116 - "SafetyVerdict"
-Cohesion: 0.40
-Nodes (5): Immutable outcome of evaluating a proposed action against the safety floor., SafetyVerdict, Assert SafetyVerdict instances are frozen to prevent tampering., test_verdict_immutability(), verdict()
+### Community 108 - "run_simulation"
+Cohesion: 0.11
+Nodes (20): Streaming inbox simulator: arrival schedule, chat loop and reply-tree…, close_input(), Any, DecisionSource, InterruptHook, IO, Queue, What one simulator run did. (+12 more)
 
-### Community 118 - "test_eval_run.py"
-Cohesion: 0.23
-Nodes (15): Manifest, evaluate(), mini_manifest(), mini_script(), Path, The eval run: teach the learning lane, freeze it, then score the sealed lane…, The first few committed rows of one split, so the test runs on the real case…, A tiny two-lane manifest built from the committed rows. The adversarial rows… (+7 more)
-
-### Community 119 - "Cutoffs"
+### Community 112 - "SimulatedMailbox"
 Cohesion: 0.15
-Nodes (9): Cutoffs, The posterior mean a route's bucket needs before the route may be considered., After an approval: easier to earn, down to the calibration floor., After a revert or a rejection: harder to earn, capped at certainty., Per-bucket cutoffs, adapted by explicit feedback (plan 4.3). Read through the…, The cutoffs this bucket is judged by, most specific first., Move this bucket's cutoffs by one explicit decision., ThresholdStore (+1 more)
+Nodes (10): Everything a commit can change, and nothing a prepare can., SimulatedMailbox, Crash, Crashing, parametrize, RuntimeError, The plan's crash matrix: whether the work ran or not, a resume applies it once., A run that dies where it stands. (+2 more)
 
-### Community 120 - "email_tools.py"
-Cohesion: 0.15
-Nodes (11): action_vocabulary(), Draft, Notification, NotifyUser, The simulated email tools (Phase 3.3). Six tools over one in-memory mailbox:…, Tells the user what happened. Local to the assistant, so the floor treats it as…, A message to the user's own assistant, never to anyone else., The tool an action id means, or the id itself when no tool holds it. (+3 more)
-
-### Community 121 - "valid"
-Cohesion: 0.23
-Nodes (12): parse_proposal(), Validate one provider answer. Anything unexpected is an error, not a default., The net under the gate: a proposal from some other path still cannot land…, One vocabulary: the offline stand-in cannot drift from the model's schema., The dataset's own unactionable ids must parse, and the floor must judge them., test_a_fenced_answer_parses(), test_a_valid_answer_parses(), test_an_action_nothing_implements_resolves_to_itself() (+4 more)
-
-### Community 122 - "first_interrupt_of"
-Cohesion: 0.24
-Nodes (11): first_interrupt_of(), gold_route(), Route, The interrupt number and case id of the first arrival with this gold route., Answer the prompts before ``position`` with a blank line, then type ``lines``.…, A yes at an ASK prompt is both the release and the reward the learner counts., Nothing was prepared, so a bare yes is not an approval to credit., test_a_policy_line_is_stored_only_once_it_is_confirmed() (+3 more)
-
-### Community 124 - "classify_action"
-Cohesion: 0.18
-Nodes (13): classify_action(), _extract_recipients(), _has_credential_intent(), _has_financial_intent(), _is_external_address(), Any, Extract and normalize all recipient addresses from action parameters., Return True if email_address domain does not match user_domain. (+5 more)
-
-### Community 125 - "dataset.py"
+### Community 116 - "safety/__init__.py"
 Cohesion: 0.14
-Nodes (20): argparse, collections_abc, dotenv, What a run costs, stage by stage (plan Commit 8.4). Cost is the one number a…, main(), Serve the calibration page. uv run python frontend-ui/server.py Standard…, Start the server, ready to be run by the caller., serve() (+12 more)
+Nodes (13): FloorRule, Representation of an audited, immutable safety floor rule., Immutable outcome of evaluating a proposed action against the safety floor., SafetyVerdict, Safety module: floor guardrails, action taxonomy, and injection tripwires., InjectionScanResult, Outcome of scanning text and metadata for prompt injection signals., The least autonomous route the floor left open, which is the fail-closed one. (+5 more)
 
-### Community 126 - "EvalReport"
-Cohesion: 0.17
-Nodes (8): EvalReport, Any, LaneView, Path, Both lanes, kept apart: one disposition count over everything, two assessments., Write the report as JSON, naming the file in the error rather than failing mute., Walk both lanes with nobody at the keyboard, and score what they did. Input is…, run_two_lanes()
+### Community 117 - "Block"
+Cohesion: 0.20
+Nodes (7): Block, classify(), Any, Every block the page has not seen yet., One chunk of the run's output, as the page shows it., What the page should make of one chunk: mail, a wait, a typed line, the summary., test_blocks_are_classified_for_the_page()
 
-### Community 127 - "record_from_chat"
-Cohesion: 0.17
-Nodes (11): LaneRecord, Lane, What one lane run recorded, in the shape the report reads. Built from a chat…, Refuse a record whose counts cannot add up to what the run processed., Read a chat run: its per-case routes, what it asked, and what the user typed., Read a graph run, including the floor's ballot and who authorised each commit., record_from_chat(), record_from_graph() (+3 more)
+### Community 118 - "evaluate"
+Cohesion: 0.10
+Nodes (31): RuntimeError, Refuse a record whose counts cannot add up to what the run processed., Raised when a run cannot be scored as asked, rather than scored wrongly., ScoringError, evaluate(), _frozen(), load_script(), Any (+23 more)
 
-### Community 128 - "test_loop.py"
-Cohesion: 0.13
-Nodes (24): ArgumentParser, build_parser(), The flags both replay paths take: which mail, which lane, who proposes, a trace., The CLI's argument grammar., _replay_flags(), asked(), _drained(), loop() (+16 more)
+### Community 119 - "autonomy/state.py"
+Cohesion: 0.10
+Nodes (23): Cutoffs, The posterior mean a route's bucket needs before the route may be considered., After an approval: easier to earn, down to the calibration floor., After a revert or a rejection: harder to earn, capped at certainty., Per-bucket cutoffs, adapted by explicit feedback (plan 4.3). Read through the…, The cutoffs this bucket is judged by, most specific first., Move this bucket's cutoffs by one explicit decision., ThresholdStore (+15 more)
 
-### Community 130 - "dispositions"
-Cohesion: 0.15
-Nodes (9): Disposition, dispositions(), How a lane's cases were handled, mutually exclusive by construction., The counts, then the denominator they have to add up to., Count routes into the three dispositions, refusing a route nobody defined., The plan's rule: three dispositions, one per case, adding up to all of them., A fifth route is a bug, and an uncounted case is the same bug wearing a number., test_a_route_the_report_does_not_know_is_refused_rather_than_counted() (+1 more)
-
-### Community 131 - "_case_from_mail_row"
-Cohesion: 0.16
-Nodes (14): Direction, SenderIdentity, _attachment(), _case_from_mail_row(), event_from_row(), _message(), EmailEvent, Canonicalize one dataset row into an EmailEvent. (+6 more)
-
-### Community 132 - "datetime"
-Cohesion: 0.33
-Nodes (3): datetime, Whether this consent still stands at a moment., One line a transcript can print about why nothing was kept.
-
-### Community 135 - "test_benign_workplace_clean_pass"
+### Community 120 - "_background_loop"
 Cohesion: 0.29
-Nodes (7): parametrize, Verify that every tool and parameter boundary resolves to the exact ActionClass., Everyday emails with natural language must NOT trigger false injection vetoes., Money, credentials and unrecognized tools mask every route except ESCALATE., test_benign_workplace_clean_pass(), test_classify_action_matrix(), test_fenced_actions_leave_escalate_alone()
+Nodes (5): AbstractEventLoop, _background_loop(), Hand a typed line to the run that is waiting for one., End the run the way end of input does: nothing else is approved., One event loop for the process, running on its own thread. HTTP handlers arrive…
 
-### Community 147 - "_order_key"
-Cohesion: 0.50
-Nodes (4): _order_key(), _ordered_roots(), Every thread root, asked-for first, the rest in a deterministic order. A root…, A total order over messages: dated first, then undated, then by id. Thread…
+### Community 122 - "interrupting_case_ids"
+Cohesion: 0.18
+Nodes (13): first_interrupt_of(), gold_route(), interrupting_case_ids(), The interrupt number and case id of the first arrival with this gold route., Answer the prompts before ``position`` with a blank line, then type ``lines``.…, A yes at an ASK prompt is both the release and the reward the learner counts., Nothing was prepared, so a bare yes is not an approval to credit., Fixture cases whose gold route asks the user, in delivery order. (+5 more)
+
+### Community 124 - "ActionClass"
+Cohesion: 0.11
+Nodes (24): ActionClass, classify_action(), _eval_credential_security(), _eval_mass_send(), _eval_money_movement(), _extract_recipients(), _has_credential_intent(), _has_financial_intent() (+16 more)
+
+### Community 125 - "cli.py"
+Cohesion: 0.12
+Nodes (23): argparse, asyncio, dotenv, What a run costs, stage by stage (plan Commit 8.4). Cost is the one number a…, The two-lane scorer: what the agent did, counted where it happened. The report…, Read a graph run, including the floor's ballot and who authorised each commit., record_from_graph(), main() (+15 more)
+
+### Community 130 - "Disposition"
+Cohesion: 0.29
+Nodes (3): Disposition, How a lane's cases were handled, mutually exclusive by construction., The counts, then the denominator they have to add up to.
+
+### Community 135 - "test_a_strangers_instructions_fence_every_route_whatever_the_action"
+Cohesion: 0.22
+Nodes (9): parametrize, Verify that every tool and parameter boundary resolves to the exact ActionClass., Everyday emails with natural language must NOT trigger false injection vetoes., Money, credentials and unrecognized tools mask every route except ESCALATE., The mail fences, not the proposed action: a harmless label still collapses to…, test_a_strangers_instructions_fence_every_route_whatever_the_action(), test_benign_workplace_clean_pass(), test_classify_action_matrix() (+1 more)
 
 ## Knowledge Gaps
-- **14 isolated node(s):** `Design: Key Decisions & Trade-offs`, `Email Autonomy Agent`, `CHOICES`, `ROUTES`, `Silence is not approval` (+9 more)
+- **14 isolated node(s):** `ROUTES`, `CHOICES`, `email-autonomy-agent`, `graphify`, `Steps` (+9 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **46 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **15 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Route` connect `Route` to `test_events.py`, `RoutingRequest`, `Learner`, `floor.py`, `test_feedback_parser.py`, `events.py`, `claims.py`, `ClaimScope`, `EmailContext`, `test_floor.py`, `SafetyVerdict`, `test_sim_tools.py`, `router.py`, `run_canonical.py`, `.load`, `agent/state.py`?**
-  _High betweenness centrality (0.058) - this node is a cross-community bridge._
-- **Why does `Session` connect `Session` to `policy.py`, `run_simulation`, `session.py`, `runner.py`, `Handler`?**
-  _High betweenness centrality (0.023) - this node is a cross-community bridge._
-- **Why does `PresidioMasker` connect `PresidioMasker` to `get_token_map`, `ContextPhoneRecognizer`, `masker.py`?**
-  _High betweenness centrality (0.023) - this node is a cross-community bridge._
-- **Are the 71 inferred relationships involving `Route` (e.g. with `preference_for()` and `Scenario`) actually correct?**
-  _`Route` has 71 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 24 inferred relationships involving `Learner` (e.g. with `run_scenario()` and `BetaStore`) actually correct?**
-  _`Learner` has 24 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 25 inferred relationships involving `Router` (e.g. with `cold_control()` and `run_scenario()`) actually correct?**
-  _`Router` has 25 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 16 inferred relationships involving `Bucket` (e.g. with `Learner` and `Router`) actually correct?**
-  _`Bucket` has 16 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `Route` connect `Route` to `policy.py`, `.prepare`, `Ledger`, `feedback.py`, `dataset.py`, `test_a_strangers_instructions_fence_every_route_whatever_the_action`, `ScopeAnchor`, `floor_check`, `test_claim_schema.py`, `ChatRunner`, `ActionPayload`, `test_floor.py`, `test_gateway.py`, `test_sim.py`, `test_sim_tools.py`, `state`, `VetoLevel`, `test_predrafts.py`, `Learner`, `Session`, `run_typed`, `claims.py`, `Routing`, `runner.py`, `run_canonical.py`, `gateway.py`, `test_freeze.py`, `Manifest`, `test_floor_protection.py`, `ProposalGateway`, `Lane`, `router.py`, `safety/__init__.py`, `interrupting_case_ids`, `ActionClass`?**
+  _High betweenness centrality (0.123) - this node is a cross-community bridge._
+- **Why does `Lane` connect `Lane` to `policy.py`, `ClaimStore`, `dataset.py`, `HeldOutReport`, `test_draft_validation.py`, `test_predrafts.py`, `Learner`, `test_replay.py`, `Session`, `LaneView`, `test_graph_resume.py`, `test_graph.py`, `run_canonical.py`, `Manifest`, `test_lanes_split_the_dataset_without_overlap`, `test_floor_protection.py`, `test_unknown_case_id_is_a_lookup_error`, `ProposalGateway`, `view`, `test_development_lane_has_nothing_to_learn_from`, `test_lane_view_is_bound_to_its_lane`, `test_loop.py`, `Route`, `evaluate`, `cli.py`?**
+  _High betweenness centrality (0.035) - this node is a cross-community bridge._
+- **Why does `ProposalGateway` connect `ProposalGateway` to `GraphSession`, `policy.py`, `graph.py`, `Route`, `Ledger`, `Session`, `HeldOutReport`, `Lane`, `test_graph.py`, `test_gateway.py`, `evaluate`, `run_canonical.py`, `ProposalError`, `cli.py`, `gateway.py`?**
+  _High betweenness centrality (0.030) - this node is a cross-community bridge._
+- **Are the 155 inferred relationships involving `Route` (e.g. with `dispositions()` and `held_out_report()`) actually correct?**
+  _`Route` has 155 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 58 inferred relationships involving `Lane` (e.g. with `main()` and `CalibrationReport`) actually correct?**
+  _`Lane` has 58 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 36 inferred relationships involving `Router` (e.g. with `cold_control()` and `run_scenario()`) actually correct?**
+  _`Router` has 36 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 30 inferred relationships involving `Learner` (e.g. with `run_scenario()` and `_frozen()`) actually correct?**
+  _`Learner` has 30 INFERRED edges - model-reasoned connections that need verification._
