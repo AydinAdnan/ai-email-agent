@@ -31,10 +31,9 @@ from agent.gateway import (
     ProposalGateway,
     ProposalProvider,
     RuleProvider,
-    build_provider,
 )
 from agent.graph import GraphError, GraphSession
-from agent.jev import DEFAULT_JEV_MODEL, route_by_jev
+from agent.jev import DEFAULT_JEV_MODEL, JEV_RECIPE, proposing_provider
 from agent.loop import LoopReport, run_loop
 from agent.memory.claims import ClaimError, ClaimStore
 from agent.memory.consent import Capability, Grant, session_grant
@@ -197,13 +196,26 @@ def build_parser() -> argparse.ArgumentParser:
             "the user, then let the agent run the half it has never seen"
         ),
     )
-    sandbox_run.add_argument("--count", type=int, default=12, help="arrivals to write")
+    sandbox_run.add_argument(
+        "--count",
+        type=int,
+        default=12,
+        help=(
+            "arrivals to write; 28 or more covers every one of the briefs in both halves, "
+            "which is what makes the per-class learning table mean anything"
+        ),
+    )
     sandbox_run.add_argument("--seed", type=int, default=7, help="seed for the run")
     sandbox_run.add_argument(
         "--provider",
-        choices=[*ENDPOINTS],
-        default="openrouter",
-        help="the model endpoint the whole run talks to",
+        choices=[*ENDPOINTS, *(f"{name}+{JEV_RECIPE}" for name in ENDPOINTS)],
+        default=_sandbox_provider(),
+        help=(
+            "the model endpoint the whole run talks to; '<endpoint>+jev' puts the decision "
+            "model in front of the agent, while the writer, the user and the judge keep "
+            "talking to the endpoint. WAJO_PROVIDER sets the default here too, unless it "
+            "names the offline rules, which cannot write mail"
+        ),
     )
     sandbox_run.add_argument(
         "--model", default=DEFAULT_PROPOSER, help="the pipeline's model"
@@ -230,6 +242,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     sandbox_run.add_argument("--no-judge", action="store_true", help="skip the judge")
+    sandbox_run.add_argument(
+        "--no-control",
+        action="store_true",
+        help=(
+            "skip the second pass over the same mailbox with nothing remembered: without "
+            "it the run says how often the agent asked, never how much learning took away"
+        ),
+    )
     sandbox_run.add_argument(
         "--out", default="artifacts/sandbox", help="where the run, charts and report go"
     )
@@ -272,6 +292,7 @@ def sandbox_run_command(args: argparse.Namespace, out: IO[str]) -> int:
                 judge_sample=args.judge_sample,
                 proposal_timeout=args.proposal_timeout,
                 no_judge=args.no_judge,
+                control=not args.no_control,
                 trace=sink,
                 notes=sys.stderr,
             )
@@ -294,7 +315,6 @@ def sandbox_run_command(args: argparse.Namespace, out: IO[str]) -> int:
 # front of it. So the hybrid is ``--provider openrouter+jev`` rather than an endpoint, a
 # model, a routing flag and a second model id - and no flag at all when .env says which
 # provider a run defaults to.
-JEV_RECIPE = "jev"
 PROVIDER_NAMES = (RuleProvider.name, *ENDPOINTS)
 PROVIDER_CHOICES = [*PROVIDER_NAMES, *(f"{name}+{JEV_RECIPE}" for name in PROVIDER_NAMES)]
 
@@ -310,17 +330,21 @@ def _default_provider() -> str:
     return named if named in PROVIDER_CHOICES else RuleProvider.name
 
 
+def _sandbox_provider() -> str:
+    """The provider the sandbox proposes with when the flag is absent.
+
+    The sandbox writes mail with a model, so the offline rules are not a default it can
+    honour - they would fail at the first arrival - and neither is a recipe built on them.
+    """
+    named = os.environ.get("WAJO_PROVIDER", "")
+    if named in PROVIDER_CHOICES and not named.startswith(RuleProvider.name):
+        return named
+    return "openrouter" if "openrouter" in ENDPOINTS else next(iter(ENDPOINTS), "openrouter")
+
+
 def _provider_for(args: argparse.Namespace, *, model: str | None = None) -> ProposalProvider:
     """The proposer one name asks for: an endpoint, or an endpoint with Jev routing it."""
-    endpoint, _, recipe = str(args.provider).partition("+")
-    provider = build_provider(endpoint, model=model or getattr(args, "model", None))
-    if not recipe:
-        return provider
-    if recipe != JEV_RECIPE:
-        raise ProposalError(
-            f"unknown recipe {args.provider!r}; known: <endpoint>+{JEV_RECIPE}"
-        )
-    return route_by_jev(provider, model=os.environ.get("WAJO_JEV_MODEL") or None)
+    return proposing_provider(args.provider, model=model or getattr(args, "model", None))
 
 
 def _replay_flags(target: argparse.ArgumentParser) -> None:

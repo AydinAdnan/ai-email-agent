@@ -553,7 +553,10 @@ class ProposalGateway:
         # One meter per run: the provider writes calls and tokens into it, the gateway
         # writes arrivals and deflections into it, and a wrapper that hides the provider
         # cannot split one run's spend across two tables.
-        self.ledger = ledger if ledger is not None else getattr(provider, "ledger", LEDGER)
+        # A provider that carries no meter of its own - a stand-in in a test, or an endpoint
+        # client that never priced anything - must not blank the run's meter by answering
+        # None: that turned every price row into an AttributeError on the first arrival.
+        self.ledger = ledger or getattr(provider, "ledger", None) or LEDGER
         provider.ledger = self.ledger
 
     async def propose(self, message: Message, hints: Triage) -> Proposal:

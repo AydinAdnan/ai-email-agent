@@ -6,12 +6,16 @@ network, a key, or a judge.
 import asyncio
 import io
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.dataset import Manifest
+from agent.learning.feedback import FeedbackContext, read_feedback
+from agent.memory.claims import ScopeAnchor
 from agent.safety.floor import Route
 from evals.harness import dispositions
 from evals.sandbox import (
+    OWNER_CARD,
     SCENARIOS,
     SandboxError,
     _by_id,
@@ -117,8 +121,20 @@ class FakeModel:
     name = "fake"
     label = "fake:test"
 
-    def __init__(self, *, strict: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        strict: bool = False,
+        route: str = "PROCEED_SILENTLY",
+        action_id: str = "email.apply_label",
+        teaches: bool = False,
+    ) -> None:
         self.strict = strict
+        self.route = route
+        self.action_id = action_id
+        # Whether the owner's reply is the standing preference the prompt handed it. Off by
+        # default, which makes the runner fall back to typing the owner's own line.
+        self.teaches = teaches
         self.ledger = None
         self.mails = {brief: body for brief, body in MAIL_BY_BRIEF.items()}
         self.written = 0
@@ -132,14 +148,19 @@ class FakeModel:
         if stage == "sandbox/writer":
             return self._mail(prompt)
         self.answered += 1
+        if self.teaches:
+            marker = "in your own words: "
+            if marker in prompt:
+                line = prompt.split(marker, 1)[1].split("'", 2)[1]
+                return json.dumps({"reply": line, "confirm": "yes", "approve": True})
         return REPLY
 
     async def complete(self, request) -> str:
         self.seen.append(request.message.message_id)
         return json.dumps(
             {
-                "route": "PROCEED_SILENTLY",
-                "action_id": "email.apply_label",
+                "route": self.route,
+                "action_id": self.action_id,
                 "params": {"label": "Newsletter"},
                 "rationale": "routine",
                 "confidence": 0.8,
@@ -182,7 +203,7 @@ def _run(tmp_path: Path, *, count: int, strict: bool):
     return _run_with(tmp_path, count=count, model=FakeModel(strict=strict))
 
 
-def _run_with(tmp_path: Path, *, count: int, model: FakeModel, notes=None):
+def _run_with(tmp_path: Path, *, count: int, model: FakeModel, notes=None, control: bool = True):
     """The whole environment on stand-ins: no key, no network, no judge."""
     return asyncio.run(
         run_sandbox(
@@ -190,6 +211,7 @@ def _run_with(tmp_path: Path, *, count: int, model: FakeModel, notes=None):
             seed=7,
             out=tmp_path,
             no_judge=True,
+            control=control,
             proposer=model,
             writer=model,
             user=model,
@@ -232,7 +254,12 @@ def test_the_run_writes_the_mailbox_report_and_charts(tmp_path: Path):
     outcome = run(tmp_path, count=6)
     report, markdown, charts = write_report(outcome)
     assert report.exists() and markdown.exists()
-    assert [path.name for path in charts] == ["states.png", "asking.png", "agreement.png"]
+    assert [path.name for path in charts] == [
+        "states.png",
+        "asking.png",
+        "agreement.png",
+        "learning.png",
+    ]
     assert all(path.stat().st_size > 0 for path in charts)
     assert (Path(outcome.out) / "mailbox.jsonl").read_text(encoding="utf-8").count("\n") == 6
     payload = json.loads(report.read_text(encoding="utf-8"))
@@ -359,3 +386,100 @@ def test_by_id_keeps_the_order_the_run_decided(tmp_path: Path):
     outcome = run(tmp_path, count=6)
     ordered = _by_id(outcome.arrivals, outcome.autonomous.order)
     assert [arrival.case_id for arrival in ordered] == list(outcome.autonomous.order)
+
+
+def _context(**overrides) -> FeedbackContext:
+    """The decision a standing preference is stated in front of."""
+    fields = {
+        "case_id": "SAND-001",
+        "sender": "claire@nexustalent.synthetic.example",
+        "intent": "recruiter follow-up",
+        "relationship_class": "unknown",
+        "route": Route.ASK_FIRST_WITH_PREDRAFT,
+        "action_id": "email.create_draft",
+        "subject": "Senior Distributed Systems role at HyperScale",
+        "message_id": "msg-sand-001",
+    } | overrides
+    return FeedbackContext(**fields)
+
+
+def test_every_standing_preference_the_owner_states_is_readable_as_a_rule():
+    """The card is only worth having if the pipeline's own parser reads it as a rule.
+
+    Wording is load-bearing rather than decoration: the parser resolves scope from the
+    nouns, so a line naming a class the classifier already reads becomes a rule about that
+    class and not about the one sender who happened to send the mail that taught it.
+    """
+    for brief, line in OWNER_CARD.items():
+        reading = read_feedback(line, context=_context(), recorded_at=datetime.now(UTC))
+        assert reading.claim is not None, f"{brief}: nothing parsed out of {line!r}"
+        assert reading.claim.route is not None, f"{brief}: {line!r} names no route"
+
+    # The silence grants are class rules, which is what makes one correction cover the mail
+    # that arrives afterwards; the two the owner keeps by hand are scoped to that mail's own
+    # sender instead, and a rule that names no scope at all would bear on the whole mailbox.
+    class_rules = {
+        brief: OWNER_CARD[brief]
+        for brief in ("newsletter", "small receipt", "recruiter", "scheduling")
+    }
+    class_rules["cloud invoice"] = OWNER_CARD["cloud invoice"]
+    class_rules["security notice"] = OWNER_CARD["security notice"]
+    for brief, line in class_rules.items():
+        claim = read_feedback(line, context=_context(), recorded_at=datetime.now(UTC)).claim
+        assert claim is not None and claim.scope_anchor is ScopeAnchor.INTENT, brief
+        assert claim.scope.intent, f"{brief}: a class rule has to name the class"
+    for brief in ("colleague question", "spoofed invoice"):
+        claim = read_feedback(
+            OWNER_CARD[brief], context=_context(), recorded_at=datetime.now(UTC)
+        ).claim
+        assert claim is not None and claim.scope.resolved, f"{brief}: a rule with no scope"
+
+
+def test_the_owner_says_a_standing_preference_once_and_not_again(tmp_path: Path):
+    """A person states a preference once; the rest of the run is whether it was heard.
+
+    Twice the briefs is the smallest mailbox that puts every class in both halves, which is
+    what the per-class learning table needs to be about mail that was actually decided.
+    """
+    outcome = run(tmp_path, count=2 * len(SCENARIOS), strict=True)
+    assert outcome.rules, "the owner's card taught nothing at all"
+    assert len(outcome.rules) == len(set(outcome.rules)), "a preference was stated twice"
+    for half in (outcome.calibration_record.order, outcome.autonomous.order):
+        decided = set(half)
+        classes = {
+            arrival.scenario.name for arrival in outcome.arrivals if arrival.case_id in decided
+        }
+        assert classes == {scenario.name for scenario in SCENARIOS}
+
+
+def test_the_control_walks_the_mailbox_with_nothing_remembered(tmp_path: Path):
+    """The number the run exists for: what the asks cost before anything was learned.
+
+    The stub proposes an ask for every arrival, so a rule the owner stated during the
+    calibration half is the only thing that can quieten the other half - which makes the
+    difference between the two worlds the learning and nothing else.
+    """
+    model = FakeModel(
+        strict=True, route="ASK_FIRST_WITH_PREDRAFT", action_id="email.create_draft"
+    )
+    outcome = _run_with(tmp_path, count=2 * len(SCENARIOS), model=model)
+    assert outcome.control is not None
+    assert outcome.rules, "nothing was learned, so there is nothing to compare against"
+    taught, control = set(outcome.asked_in("taught")), set(outcome.asked_in("control"))
+    assert control - taught == set(outcome.saved)
+    assert outcome.saved, "the taught run asked exactly as often as one with no memory"
+    assert taught <= control
+    assert sum(row[1] for row in outcome.learning_table()) == len(outcome.arrivals)
+    assert sum(row[2] for row in outcome.learning_table()) == len(control)
+    assert sum(row[3] for row in outcome.learning_table()) == len(taught)
+    assert "with nothing remembered" in render(outcome)
+
+
+def test_a_run_may_be_asked_for_no_control_pass(tmp_path: Path):
+    """The control is a second pass over every arrival, so it can be declined."""
+    outcome = _run_with(
+        tmp_path, count=6, model=FakeModel(strict=True), control=False
+    )
+    assert outcome.control is None
+    assert outcome.asks_with_nothing_remembered == 0
+    assert "not measured" in render(outcome)
