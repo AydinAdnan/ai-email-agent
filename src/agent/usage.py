@@ -23,6 +23,9 @@ PRICES: Mapping[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "inference-net/schematron-v2-small": (0.05, 0.23),
     "inference-net/schematron-v2-turbo": (0.03, 0.15),
+    # The sandbox's two roles, at the rates the provider's own catalogue publishes.
+    "prism-ml/ternary-bonsai-2-27b": (0.075, 0.50),
+    "~deepseek/deepseek-flash-latest": (0.135, 0.54),
 }
 
 

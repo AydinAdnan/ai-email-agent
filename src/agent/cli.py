@@ -44,6 +44,15 @@ from evals.run_eval import DEFAULT_OUT as DEFAULT_EVAL_OUT
 from evals.run_eval import DEFAULT_SCRIPT as DEFAULT_EVAL_SCRIPT
 from evals.run_eval import render as render_eval
 from evals.run_eval import run_eval
+from evals.sandbox import (
+    DEFAULT_JUDGE,
+    DEFAULT_PROPOSER,
+    DEFAULT_WRITER,
+    SandboxError,
+    run_sandbox,
+)
+from evals.sandbox import render as render_sandbox
+from evals.sandbox import write_report as write_sandbox_report
 
 # The lanes a human may sit in front of. Held-out cases are sealed: reading them
 # here would spend the only unbiased measurement Phase 8 has.
@@ -169,6 +178,58 @@ def build_parser() -> argparse.ArgumentParser:
         "--trace", metavar="PATH", help="append both lanes' decisions to a JSONL trace"
     )
 
+    sandbox = commands.add_parser(
+        "sandbox",
+        help="a live mailbox: fresh mail every run, through the real pipeline, judged from outside",
+    )
+    sandbox_commands = sandbox.add_subparsers(dest="sandbox_command", required=True)
+    sandbox_run = sandbox_commands.add_parser(
+        "run",
+        help=(
+            "write a fresh mailbox, calibrate on half of it with a model standing in for "
+            "the user, then let the agent run the half it has never seen"
+        ),
+    )
+    sandbox_run.add_argument("--count", type=int, default=12, help="arrivals to write")
+    sandbox_run.add_argument("--seed", type=int, default=7, help="seed for the run")
+    sandbox_run.add_argument(
+        "--provider",
+        choices=[*ENDPOINTS],
+        default="openrouter",
+        help="the model endpoint the whole run talks to",
+    )
+    sandbox_run.add_argument(
+        "--model", default=DEFAULT_PROPOSER, help="the pipeline's model"
+    )
+    sandbox_run.add_argument(
+        "--writer-model", default=DEFAULT_WRITER, help="the model that writes the mail"
+    )
+    sandbox_run.add_argument(
+        "--user-model", default=DEFAULT_JUDGE, help="the model that answers as the user"
+    )
+    sandbox_run.add_argument(
+        "--judge", default=DEFAULT_JUDGE, help="the model that judges the result"
+    )
+    sandbox_run.add_argument(
+        "--judge-sample", type=int, default=12, help="cases the judge is asked about"
+    )
+    sandbox_run.add_argument(
+        "--proposal-timeout",
+        type=float,
+        default=60.0,
+        help=(
+            "seconds to wait for one proposal: a slow model answers in half a minute, and "
+            "at the gateway's own 20s every proposal would time out and fail closed"
+        ),
+    )
+    sandbox_run.add_argument("--no-judge", action="store_true", help="skip the judge")
+    sandbox_run.add_argument(
+        "--out", default="artifacts/sandbox", help="where the run, charts and report go"
+    )
+    sandbox_run.add_argument(
+        "--trace", metavar="PATH", help="append both halves' decisions to a JSONL trace"
+    )
+
     data = commands.add_parser("data", help="the case set: what it holds and whether it holds together")
     data_commands = data.add_subparsers(dest="data_command", required=True)
     validate = data_commands.add_parser(
@@ -185,6 +246,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSONL case set to check (default: the committed case set)",
     )
     return parser
+
+
+def sandbox_run_command(args: argparse.Namespace, out: IO[str]) -> int:
+    """Write a fresh mailbox and run the pipeline over it, with nobody at the keyboard."""
+    sink = TraceSink(args.trace) if args.trace else None
+    try:
+        outcome = asyncio.run(
+            run_sandbox(
+                count=args.count,
+                seed=args.seed,
+                provider=args.provider,
+                model=args.model,
+                writer_model=args.writer_model,
+                user_model=args.user_model,
+                judge_model=args.judge,
+                out=args.out,
+                judge_sample=args.judge_sample,
+                proposal_timeout=args.proposal_timeout,
+                no_judge=args.no_judge,
+                trace=sink,
+                notes=sys.stderr,
+            )
+        )
+    finally:
+        if sink is not None:
+            sink.close()
+    report, markdown, written = write_sandbox_report(outcome)
+    out.write(render_sandbox(outcome) + "\n")
+    out.write(f"\nartifacts: {report.name}, {markdown.name} in {outcome.out}\n")
+    out.write(f"charts: {', '.join(path.name for path in written)}\n")
+    if sink is not None:
+        out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")
+    # A sandbox run measures, it does not gate: the mail is new every time and no two
+    # runs compare, so it reports and exits zero unless it could not run at all.
+    return 0
 
 
 def _replay_flags(target: argparse.ArgumentParser) -> None:
@@ -595,6 +691,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Foreseeable operational failures get one readable line, not a traceback.
             out.write(f"cannot run: {error}\n")
             return 2
+    if (args.command, getattr(args, "sandbox_command", None)) == ("sandbox", "run"):
+        try:
+            return sandbox_run_command(args, out)
+        except KeyboardInterrupt:
+            out.write("\nstopped before the mailbox finished\n")
+            return 130
+        except (
+            SandboxError,
+            ProposalError,
+            ManifestError,
+            SplitViolation,
+            TraceError,
+            ClaimError,
+            ScoringError,
+            OSError,
+        ) as error:
+            # Foreseeable operational failures get one readable line, not a traceback.
+            out.write(f"cannot run the sandbox: {error}\n")
+            return 2
     if (args.command, getattr(args, "sim_command", None)) == ("sim", "run"):
         try:
             return sim_run(args, out)
@@ -608,4 +723,4 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 2
 
 
-__all__ = ["build_parser", "main", "sim_run"]
+__all__ = ["build_parser", "main", "sandbox_run_command", "sim_run"]

@@ -400,6 +400,35 @@ class OpenAICompatibleProvider:
         )
         return response.choices[0].message.content or ""
 
+    async def text(self, prompt: str, *, system: str = SYSTEM_PROMPT, stage: str = STAGE) -> str:
+        """One plain completion, metered like every other call.
+
+        The proposal path never uses this. It exists so the sandbox can talk to the same
+        endpoint through the same seam - writing a mailbox arrival, or answering as the
+        user - without dressing it up as a proposal. It is metered under its own stage,
+        so what those calls cost is a row in the table rather than part of the
+        proposal's.
+        """
+        response = await self._connect().chat.completions.create(
+            model=self.model,
+            temperature=self.temperature,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        if not getattr(response, "choices", None):
+            raise ProposalError(f"{self.name} answered {self.model} with no choices")
+        prompt_tokens, completion_tokens = _usage(response)
+        self.ledger.record(
+            stage=stage,
+            provider=self.name,
+            model=self.model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        return response.choices[0].message.content or ""
+
 
 def label_for(hints: Triage) -> str | None:
     """The folder the pipeline names for this mail, or None when it names none."""

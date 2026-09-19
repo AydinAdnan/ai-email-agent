@@ -298,9 +298,13 @@ async def commit(state: GraphState, context: GraphRuntime) -> GraphState:
     prepared = context.prepared.get(case_id)
     if prepared is None:
         raise GraphError(f"case {case_id} reached commit with nothing prepared")
-    authorization = context.authorizations.get(case_id) or _authorized_settled(
-        context, state, case_id, prepared
-    )
+    authorization = context.authorizations.get(case_id)
+    if authorization is None:
+        # Settled from the state, after a resume: it is stored like any other, because
+        # the runtime's authorizations are what a report reads to tell an approved commit
+        # from one nothing licensed.
+        authorization = _authorized_settled(context, state, case_id, prepared)
+        context.authorizations[case_id] = authorization
     receipt = context.registry.commit(prepared, authorization, at=context.clock.now())
     context.receipts[case_id] = receipt
     return {"node": "commit", "receipt": receipt_fields(receipt)}
