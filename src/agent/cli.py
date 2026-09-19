@@ -7,6 +7,7 @@ with what the calibration kept.
 """
 import argparse
 import asyncio
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,6 +30,7 @@ from agent.gateway import (
     ProposalError,
     ProposalGateway,
     ProposalProvider,
+    RuleProvider,
     build_provider,
 )
 from agent.graph import GraphError, GraphSession
@@ -170,25 +172,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     everything.add_argument(
         "--provider",
-        choices=["rules", *ENDPOINTS],
-        default="rules",
-        help="who proposes during the calibration: the offline rules, or a model endpoint",
-    )
-    everything.add_argument("--model", help="model id to use; falls back to WAJO_MODEL")
-    everything.add_argument(
-        "--route-by",
-        choices=["jev"],
+        choices=PROVIDER_CHOICES,
+        default=_default_provider(),
         help=(
-            "put a decision model in front of the provider: Jev answers the four-way "
-            "route as one typed question, the model still chooses the action and the "
-            "reply. Needs OPENROUTER_API_KEY; the floor rules either way"
+            "who proposes during the calibration: the offline rules, a model endpoint, or "
+            "an endpoint with Jev routing it ('openrouter+jev'). WAJO_PROVIDER sets the "
+            "default"
         ),
     )
-    everything.add_argument(
-        "--jev-model",
-        default=None,
-        help=f"the decision model to route with (default: {DEFAULT_JEV_MODEL})",
-    )
+    everything.add_argument("--model", help="model id to use; falls back to WAJO_MODEL")
     everything.add_argument(
         "--trace", metavar="PATH", help="append both lanes' decisions to a JSONL trace"
     )
@@ -298,12 +290,37 @@ def sandbox_run_command(args: argparse.Namespace, out: IO[str]) -> int:
     return 0
 
 
+# One name chooses the whole proposer: an endpoint, and ``+jev`` for the decision model in
+# front of it. So the hybrid is ``--provider openrouter+jev`` rather than an endpoint, a
+# model, a routing flag and a second model id - and no flag at all when .env says which
+# provider a run defaults to.
+JEV_RECIPE = "jev"
+PROVIDER_NAMES = (RuleProvider.name, *ENDPOINTS)
+PROVIDER_CHOICES = [*PROVIDER_NAMES, *(f"{name}+{JEV_RECIPE}" for name in PROVIDER_NAMES)]
+
+
+def _default_provider() -> str:
+    """The provider a run proposes with when the flag is absent.
+
+    Read here rather than at module import, because .env is loaded by ``main`` and this
+    runs after it. A value that names no known provider is ignored instead of breaking
+    every command: a typo in a dotfile should not take the CLI with it.
+    """
+    named = os.environ.get("WAJO_PROVIDER", "")
+    return named if named in PROVIDER_CHOICES else RuleProvider.name
+
+
 def _provider_for(args: argparse.Namespace, *, model: str | None = None) -> ProposalProvider:
-    """The provider a run proposes with, with Jev in front of it when the run asked."""
-    provider = build_provider(args.provider, model=model or getattr(args, "model", None))
-    if getattr(args, "route_by", None) == "jev":
-        return route_by_jev(provider, model=getattr(args, "jev_model", None))
-    return provider
+    """The proposer one name asks for: an endpoint, or an endpoint with Jev routing it."""
+    endpoint, _, recipe = str(args.provider).partition("+")
+    provider = build_provider(endpoint, model=model or getattr(args, "model", None))
+    if not recipe:
+        return provider
+    if recipe != JEV_RECIPE:
+        raise ProposalError(
+            f"unknown recipe {args.provider!r}; known: <endpoint>+{JEV_RECIPE}"
+        )
+    return route_by_jev(provider, model=os.environ.get("WAJO_JEV_MODEL") or None)
 
 
 def _replay_flags(target: argparse.ArgumentParser) -> None:
@@ -338,30 +355,19 @@ def _replay_flags(target: argparse.ArgumentParser) -> None:
     )
     target.add_argument(
         "--provider",
-        choices=["rules", *ENDPOINTS],
-        default="rules",
+        choices=PROVIDER_CHOICES,
+        default=_default_provider(),
         help=(
-            "who proposes: the offline rule stand-in, or a model endpoint "
-            "(its key goes in .env at the repository root)"
+            "who proposes: the offline rule stand-in, a model endpoint, or an endpoint "
+            "with a decision model in front of it ('openrouter+jev' asks Jev for the "
+            "four-way route and the model for the work, with the decision model named by "
+            f"WAJO_JEV_MODEL, default {DEFAULT_JEV_MODEL}). Keys go in .env, and "
+            "WAJO_PROVIDER sets the default for every command"
         ),
     )
     target.add_argument(
         "--model",
         help="model id to use; falls back to WAJO_MODEL, then the endpoint's default",
-    )
-    target.add_argument(
-        "--route-by",
-        choices=["jev"],
-        help=(
-            "put a decision model in front of the provider: Jev answers the four-way "
-            "route as one typed question, the model still chooses the action and the "
-            "reply. Needs OPENROUTER_API_KEY; the floor rules either way"
-        ),
-    )
-    target.add_argument(
-        "--jev-model",
-        default=None,
-        help=f"the decision model to route with (default: {DEFAULT_JEV_MODEL})",
     )
     target.add_argument(
         "--trace",

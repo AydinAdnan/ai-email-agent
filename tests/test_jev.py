@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from agent.cli import _provider_for, build_parser
 from agent.dataset import Lane, Manifest
 from agent.events import Direction, Message, SenderIdentity
 from agent.gateway import ProposalError, ProposalGateway, ProposalRequest
@@ -198,6 +199,39 @@ def test_the_decision_is_metered_under_its_own_stage_with_the_price_it_reported(
     assert row.tokens == 442 + 64
     # The endpoint priced its own call, so the rate table is not consulted for it.
     assert row.cost == pytest.approx(0.00002)
+
+
+def test_one_name_selects_the_whole_proposer(monkeypatch) -> None:
+    """The hybrid is a name, not four flags: `<endpoint>+jev`."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    hybrid_args = build_parser().parse_args(["graph", "run", "--provider", "openrouter+jev"])
+    plain_args = build_parser().parse_args(["graph", "run", "--provider", "openrouter"])
+
+    assert isinstance(_provider_for(hybrid_args), JevRouted)
+    assert not isinstance(_provider_for(plain_args), JevRouted)
+    # The offline stand-in composes with the decision model too, which is the cheap way to
+    # run the routing half without paying a text model for the work.
+    offline = build_parser().parse_args(["graph", "run", "--provider", "rules+jev"])
+    assert isinstance(_provider_for(offline), JevRouted)
+
+
+def test_the_provider_a_command_uses_can_come_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("WAJO_PROVIDER", "rules+jev")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    args = build_parser().parse_args(["graph", "run"])
+
+    assert args.provider == "rules+jev"
+    assert isinstance(_provider_for(args), JevRouted)
+
+
+def test_a_typo_in_the_environment_does_not_break_every_command(monkeypatch) -> None:
+    monkeypatch.setenv("WAJO_PROVIDER", "opernrouter")
+
+    args = build_parser().parse_args(["graph", "run"])
+
+    assert args.provider == "rules"
 
 
 def test_the_hybrid_needs_a_key_to_route(monkeypatch) -> None:
