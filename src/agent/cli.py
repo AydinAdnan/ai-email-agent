@@ -32,6 +32,7 @@ from agent.gateway import (
     build_provider,
 )
 from agent.graph import GraphError, GraphSession
+from agent.jev import DEFAULT_JEV_MODEL, route_by_jev
 from agent.loop import LoopReport, run_loop
 from agent.memory.claims import ClaimError, ClaimStore
 from agent.memory.consent import Capability, Grant, session_grant
@@ -175,6 +176,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     everything.add_argument("--model", help="model id to use; falls back to WAJO_MODEL")
     everything.add_argument(
+        "--route-by",
+        choices=["jev"],
+        help=(
+            "put a decision model in front of the provider: Jev answers the four-way "
+            "route as one typed question, the model still chooses the action and the "
+            "reply. Needs OPENROUTER_API_KEY; the floor rules either way"
+        ),
+    )
+    everything.add_argument(
+        "--jev-model",
+        default=None,
+        help=f"the decision model to route with (default: {DEFAULT_JEV_MODEL})",
+    )
+    everything.add_argument(
         "--trace", metavar="PATH", help="append both lanes' decisions to a JSONL trace"
     )
 
@@ -283,6 +298,14 @@ def sandbox_run_command(args: argparse.Namespace, out: IO[str]) -> int:
     return 0
 
 
+def _provider_for(args: argparse.Namespace, *, model: str | None = None) -> ProposalProvider:
+    """The provider a run proposes with, with Jev in front of it when the run asked."""
+    provider = build_provider(args.provider, model=model or getattr(args, "model", None))
+    if getattr(args, "route_by", None) == "jev":
+        return route_by_jev(provider, model=getattr(args, "jev_model", None))
+    return provider
+
+
 def _replay_flags(target: argparse.ArgumentParser) -> None:
     """The flags both replay paths take: which mail, which lane, who proposes, a trace."""
     target.add_argument(
@@ -325,6 +348,20 @@ def _replay_flags(target: argparse.ArgumentParser) -> None:
     target.add_argument(
         "--model",
         help="model id to use; falls back to WAJO_MODEL, then the endpoint's default",
+    )
+    target.add_argument(
+        "--route-by",
+        choices=["jev"],
+        help=(
+            "put a decision model in front of the provider: Jev answers the four-way "
+            "route as one typed question, the model still chooses the action and the "
+            "reply. Needs OPENROUTER_API_KEY; the floor rules either way"
+        ),
+    )
+    target.add_argument(
+        "--jev-model",
+        default=None,
+        help=f"the decision model to route with (default: {DEFAULT_JEV_MODEL})",
     )
     target.add_argument(
         "--trace",
@@ -376,7 +413,7 @@ def data_validate(args: argparse.Namespace, out: IO[str]) -> int:
 def eval_all(args: argparse.Namespace, out: IO[str]) -> int:
     """Teach the calibration lane, freeze it, and score the sealed lane once."""
     manifest = Manifest.load(args.fixture)
-    provider = build_provider(args.provider, model=args.model)
+    provider = _provider_for(args)
     label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
     sink = TraceSink(args.trace) if args.trace else None
     try:
@@ -412,7 +449,7 @@ def _policy(
     """Pick the decision source and name it. Labels are a reference mode, not the default."""
     if args.policy == "labels":
         return GoldPolicy(), "the dataset's labels (reference)"
-    provider = build_provider(args.provider, model=args.model)
+    provider = _provider_for(args)
     label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
     return ProposalPolicy(_proposing(provider, store)), f"the {label} proposal"
 
@@ -494,7 +531,7 @@ def loop_run(args: argparse.Namespace, out: IO[str]) -> int:
         Manifest.load(args.mail, mail_only=True) if args.mail else Manifest.load(args.fixture)
     )
     view = manifest.view(Lane(args.lane))
-    provider = build_provider(args.provider, model=args.model)
+    provider = _provider_for(args)
     label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
     store = _open_store(args)
     out.write(
@@ -594,7 +631,7 @@ def graph_run(args: argparse.Namespace, out: IO[str]) -> int:
     )
     view = manifest.view(Lane(args.lane))
     cases = view.cases
-    provider = build_provider(args.provider, model=args.model)
+    provider = _provider_for(args)
     label = str(getattr(provider, "label", None) or getattr(provider, "name", provider))
     mask = not args.no_mask
     store = _open_store(args)

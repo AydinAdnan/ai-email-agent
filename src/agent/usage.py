@@ -39,6 +39,9 @@ class Spend:
     calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # What the endpoint itself said the calls cost, when it says. A price the provider
+    # reports beats a rate table we typed, because one of them was there when it happened.
+    measured_cost: float | None = None
 
     @property
     def tokens(self) -> int:
@@ -49,8 +52,11 @@ class Spend:
         """The estimated cost, or None when this model has no published rate.
 
         A call that reported no tokens costs nothing whatever the model's rate, so an
-        offline provider is priced at zero rather than left unpriced.
+        offline provider is priced at zero rather than left unpriced. A stage that was
+        told its own cost keeps it, and is not re-priced from the table.
         """
+        if self.measured_cost is not None:
+            return self.measured_cost
         if self.tokens == 0:
             return 0.0
         rate = PRICES.get(self.model)
@@ -82,12 +88,15 @@ class Ledger:
         model: str,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        cost: float | None = None,
     ) -> Spend:
-        """One provider call, with whatever token counts its response reported."""
+        """One provider call, with whatever token counts and price its response reported."""
         row = self.spends.setdefault((stage, provider, model), Spend(stage, provider, model))
         row.calls += 1
         row.prompt_tokens += max(0, int(prompt_tokens))
         row.completion_tokens += max(0, int(completion_tokens))
+        if cost is not None:
+            row.measured_cost = (row.measured_cost or 0.0) + max(0.0, float(cost))
         return row
 
     @property
