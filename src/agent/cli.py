@@ -38,6 +38,7 @@ from agent.memory.consent import Capability, Grant, session_grant
 from agent.sim.policy import GoldPolicy, ProposalPolicy
 from agent.sim.runner import DecisionSource, run_simulation
 from agent.trace import TraceError, TraceSink
+from agent.usage import LEDGER
 from evals.harness import BLOCK, ScoringError
 from evals.run_eval import DEFAULT_OUT as DEFAULT_EVAL_OUT
 from evals.run_eval import DEFAULT_SCRIPT as DEFAULT_EVAL_SCRIPT
@@ -301,6 +302,8 @@ def eval_all(args: argparse.Namespace, out: IO[str]) -> int:
         f"digest: {manifest.dataset_digest[:16]}\n"
         f"proposal source: the {label} proposal\n"
         f"{render_eval(outcome)}\n"
+        # The third report the exit gate asks for: what the run spent getting there.
+        f"\ncost:\n{LEDGER.render()}\n"
     )
     if sink is not None:
         out.write(f"trace: {sink.lines} line(s) in {sink.path}\n")

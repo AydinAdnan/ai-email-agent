@@ -26,11 +26,16 @@ from agent.events import Message
 from agent.safety.floor import Route, strictest
 from agent.tools.email_tools import ACTION_TO_TOOL, action_vocabulary, tool_for_action
 from agent.triage import RECEIPT_SILENT_THRESHOLD, Triage, amount_in
+from agent.usage import LEDGER, Ledger
 
 # The action a proposal names when it has nothing to do. The floor does not know the
 # tool it resolves to, so it fails closed to ESCALATE, which is the honest outcome for
 # "nothing applies". It is also the action the dataset itself uses for such a case.
 NO_ACTION_TOOL = "unsupported"
+
+# The pipeline stage that spends money. It is a name in the cost table, so it says what
+# the money bought rather than only how much of it was spent.
+STAGE = "proposal"
 
 PROPOSAL_SCHEMA = {
     "route": "one of " + ", ".join(route.value for route in Route),
@@ -134,24 +139,34 @@ ESCALATING_ASKS = re.compile(
 INTERNAL_RELATIONSHIPS = frozenset({"colleague", "manager", "friend"})
 
 
-def persona_demanded_route(message: Message, hints: Triage) -> Route | None:
-    """The route this mail compels on the persona's own account, or None when free.
+def persona_rule(message: Message, hints: Triage) -> str | None:
+    """Which persona rule this mail trips, in words, or None when it trips none.
 
-    These are the persona's hard rules, not the floor's: no credential is disclosed to
+    The rules are the persona's hard ones, not the floor's: no credential is disclosed to
     anyone, and a sender the mailbox does not already know asking for access, money or
-    files is not a routine request. They used to live inside ``RuleProvider``, which
-    made them true only of the offline stand-in - a model could propose a quiet route
-    for the same mail and be believed. They are checked against every proposal instead.
+    files is not a routine request. They used to live inside ``RuleProvider``, which made
+    them true only of the offline stand-in - a model could propose a quiet route for the
+    same mail and be believed. Every proposal is now measured against them, and they are
+    answered as text so a refusal can say which rule it was.
     """
     outside = hints.relationship_class not in INTERNAL_RELATIONSHIPS
     ask = f"{message.subject}\n{message.body}"
-    if (
-        CREDENTIAL_ASKS.search(ask)
-        or (hints.intent in ESCALATING_INTENTS and outside)
-        or (outside and ESCALATING_ASKS.search(ask))
-    ):
-        return Route.ESCALATE
+    if CREDENTIAL_ASKS.search(ask):
+        return "a credential was asked for, and none is disclosed to anyone"
+    if hints.intent in ESCALATING_INTENTS and outside:
+        return f"a {hints.intent} from a sender the mailbox does not know"
+    if outside and ESCALATING_ASKS.search(ask):
+        return "an outside sender asking for files, access or secrecy"
     return None
+
+
+def persona_demanded_route(message: Message, hints: Triage) -> Route | None:
+    """The route this mail compels on the persona's own account, or None when free.
+
+    A rule that fires always demands the same thing - a human - so this is the route the
+    rest of the pipeline treats as already decided.
+    """
+    return None if persona_rule(message, hints) is None else Route.ESCALATE
 
 
 class ProposalError(RuntimeError):
@@ -178,6 +193,9 @@ class ProposalRequest:
     message: Message
     hints: Triage
     repair_note: str = ""
+    # Which pipeline stage is asking. It rides on the request so the provider can meter
+    # its own call without the caller having to hand it back afterwards.
+    stage: str = STAGE
 
     def as_prompt(self) -> str:
         """The request rendered for a text model. The mail is the only input."""
@@ -228,7 +246,13 @@ class RuleProvider:
 
     name = "rules"
 
+    def __init__(self, *, ledger: Ledger | None = None) -> None:
+        self.ledger = ledger if ledger is not None else LEDGER
+
     async def complete(self, request: ProposalRequest) -> str:
+        # Counted like any other call, and free: a table that omitted offline calls would
+        # report a run as spending nothing without saying what it did instead.
+        self.ledger.record(stage=request.stage, provider=self.name, model="")
         return json.dumps(self.build(request.message, request.hints), sort_keys=True)
 
     def build(self, message: Message, hints: Triage) -> dict[str, Any]:
@@ -313,7 +337,9 @@ class OpenAICompatibleProvider:
         temperature: float = 0.0,
         structured_output: bool | None = None,
         client: Any | None = None,
+        ledger: Ledger | None = None,
     ) -> None:
+        self.ledger = ledger if ledger is not None else LEDGER
         self.endpoint = endpoint
         self.name = endpoint.name
         self.api_key = api_key
@@ -353,6 +379,14 @@ class OpenAICompatibleProvider:
         if self.structured_output:
             kwargs["response_format"] = RESPONSE_FORMAT
         response = await self._connect().chat.completions.create(**kwargs)
+        prompt_tokens, completion_tokens = _usage(response)
+        self.ledger.record(
+            stage=request.stage,
+            provider=self.name,
+            model=self.model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
         return response.choices[0].message.content or ""
 
 
@@ -360,6 +394,44 @@ def label_for(hints: Triage) -> str | None:
     """The folder the pipeline names for this mail, or None when it names none."""
     chosen = ACTION_BY_INTENT.get(hints.intent)
     return chosen[1].get("label") if chosen is not None else None
+
+
+def _persona_refused(rule: str) -> Proposal:
+    """The escalation the persona's own rule makes, written without asking anyone.
+
+    It has to look exactly like a proposal that came back from a provider and was raised:
+    no action, no arguments, and a rationale naming the rule. Anything else and the rest
+    of the pipeline would be deciding a subtly different question.
+    """
+    return Proposal(
+        route=Route.ESCALATE,
+        action_id=None,
+        tool_name=NO_ACTION_TOOL,
+        params={},
+        rationale=f"persona rule: {rule} - a human decides this one",
+    )
+
+
+def _attribute(source: Any, name: str) -> Any:
+    """One field off a response or a usage object, whichever shape it arrived in."""
+    if isinstance(source, Mapping):
+        return source.get(name)
+    return getattr(source, name, None)
+
+
+def _usage(response: Any) -> tuple[int, int]:
+    """The (prompt, completion) tokens a response reports, or zeros if it reports none.
+
+    A response without usage is not a failure - the call is still counted, and the table
+    shows it as a call that reported no tokens.
+    """
+    usage = _attribute(response, "usage")
+    if usage is None:
+        return 0, 0
+    return (
+        int(_attribute(usage, "prompt_tokens") or 0),
+        int(_attribute(usage, "completion_tokens") or 0),
+    )
 
 
 def _label_derived(proposal: Proposal, hints: Triage) -> Proposal:
@@ -381,6 +453,10 @@ def _label_derived(proposal: Proposal, hints: Triage) -> Proposal:
 
 def _persona_checked(proposal: Proposal, message: Message, hints: Triage) -> Proposal:
     """Raise a proposal to whatever the persona's hard rules demand, and say so.
+
+    The gate in ``propose`` means this rarely has anything to correct for a proposal the
+    pipeline asked for. It stays as the net under that gate: whatever path produced a
+    proposal, a mail the persona refuses does not leave here as a quiet one.
 
     Every provider goes through this, which is the point: the rules belong to the mail,
     not to whoever answered. Raising to an escalation also drops the action, because an
@@ -418,21 +494,49 @@ def _mail_rules(proposal: Proposal, message: Message, hints: Triage) -> Proposal
 class ProposalGateway:
     """Turns provider text into a validated proposal, with one repair attempt."""
 
-    def __init__(self, provider: ProposalProvider, *, timeout: float = 20.0) -> None:
+    def __init__(
+        self,
+        provider: ProposalProvider,
+        *,
+        timeout: float = 20.0,
+        ledger: Ledger | None = None,
+    ) -> None:
         self.provider = provider
         self.timeout = timeout
         self.repairs = 0
         self.failures = 0
+        # One meter per run: the provider writes calls and tokens into it, the gateway
+        # writes arrivals and deflections into it, and a wrapper that hides the provider
+        # cannot split one run's spend across two tables.
+        self.ledger = ledger if ledger is not None else getattr(provider, "ledger", LEDGER)
+        provider.ledger = self.ledger
 
     async def propose(self, message: Message, hints: Triage) -> Proposal:
-        """Ask the provider, repair once if the answer does not parse, then fail closed."""
+        """Ask the provider, repair once if the answer does not parse, then fail closed.
+
+        Mail the persona's own rules refuse to treat as routine never reaches the
+        provider: the rules can only demand an escalation, that escalation drops the
+        action, and a provider may not lower the route - so the call would buy nothing
+        and cost a hundredth of a cent. It is counted as a deflection, which is what
+        makes the deterministic layer's saving visible.
+        """
+        demanded = persona_rule(message, hints)
+        if demanded is not None:
+            self.ledger.arrival(deflected=True)
+            return _mail_rules(_persona_refused(demanded), message, hints)
+        self.ledger.arrival()
         request = ProposalRequest(message=message, hints=hints)
         try:
             first = await self._ask(request)
             return _mail_rules(parse_proposal(first, provider=self.provider.name), message, hints)
         except (ProposalError, TimeoutError) as first_error:
             self.repairs += 1
-            repair = ProposalRequest(message=message, hints=hints, repair_note=str(first_error))
+            repair = ProposalRequest(
+                message=message,
+                hints=hints,
+                repair_note=str(first_error),
+                stage=f"{STAGE} (repair)",
+            )
             try:
                 second = await self._ask(repair)
                 return _mail_rules(
@@ -590,4 +694,5 @@ __all__ = [
     "build_provider",
     "parse_proposal",
     "persona_demanded_route",
+    "persona_rule",
 ]

@@ -16,6 +16,7 @@ from agent.gateway import (
     ProposalGateway,
     ProposalRequest,
     RuleProvider,
+    _mail_rules,
     build_provider,
     parse_proposal,
     persona_demanded_route,
@@ -240,24 +241,48 @@ def test_a_credential_request_escalates_even_from_inside() -> None:
     assert proposal.route is Route.ESCALATE
 
 
-def test_a_provider_that_misses_a_persona_rule_is_corrected() -> None:
-    """The rules belong to the mail, so a model proposing a quiet route does not win."""
-    phishing = message("billing@payables-desk.example", verified=False, subject="Wire the balance")
-    quiet = ScriptedProvider(
+def quiet_but_wrong() -> ScriptedProvider:
+    """A provider that would happily label suspicious mail and move on."""
+    return ScriptedProvider(
         valid(
             route="PROCEED_AND_NOTIFY",
             action_id="email.apply_label",
             params={"label": "Finance"},
         )
     )
+
+
+def test_a_mail_the_persona_refuses_is_never_put_to_the_provider() -> None:
+    """The rules belong to the mail, so a model never gets to propose a quiet route for it."""
+    phishing = message("billing@payables-desk.example", verified=False, subject="Wire the balance")
+    quiet = quiet_but_wrong()
     gateway = ProposalGateway(quiet)
     proposal = asyncio.run(gateway.propose(phishing, triage(phishing)))
     assert proposal.route is Route.ESCALATE
     assert proposal.action_id is None and proposal.tool_name == NO_ACTION_TOOL
     assert proposal.params == {}
-    assert "persona rule raised PROCEED_AND_NOTIFY to ESCALATE" in proposal.rationale
-    # The correction is not a failed proposal: the provider answered fine.
+    assert "persona rule: a financial request" in proposal.rationale
+    assert quiet.requests == [], "nothing was asked, so nothing was bought"
+    # Nothing was asked, and nothing failed: the provider was never needed.
     assert (gateway.repairs, gateway.failures) == (0, 0)
+
+
+def test_the_fence_under_the_gate_raises_a_proposal_that_arrives_anyway() -> None:
+    """The net under the gate: a proposal from some other path still cannot land quietly."""
+    phishing = message("billing@payables-desk.example", verified=False, subject="Wire the balance")
+    quiet = parse_proposal(
+        valid(
+            route="PROCEED_AND_NOTIFY",
+            action_id="email.apply_label",
+            params={"label": "Finance"},
+        ),
+        provider="scripted",
+    )
+    raised = _mail_rules(quiet, phishing, triage(phishing))
+    assert raised.route is Route.ESCALATE
+    assert raised.action_id is None and raised.tool_name == NO_ACTION_TOOL
+    assert raised.params == {}
+    assert "persona rule raised PROCEED_AND_NOTIFY to ESCALATE" in raised.rationale
 
 
 def test_a_folder_name_comes_from_the_mail_not_from_the_proposer() -> None:
