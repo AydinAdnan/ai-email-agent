@@ -72,9 +72,9 @@
     "semantic_hash": ""
   },
   "src/agent/cli.py": {
-    "mtime": 1789790629.7352781,
-    "seen": 1789791254.7725942,
-    "ast_hash": "6a9f76662f59d939138c3c0694b79b20",
+    "mtime": 1789757415.0180461,
+    "seen": 1789757655.7796047,
+    "ast_hash": "a2de1fec6986bc1a657848c702a198f7",
     "semantic_hash": ""
   },
   "src/agent/dataset.py": {
@@ -90,9 +90,9 @@
     "semantic_hash": ""
   },
   "src/agent/gateway.py": {
-    "mtime": 1789790606.424533,
-    "seen": 1789791254.7726014,
-    "ast_hash": "d9b4c86c9cadc8852b15d6a70657122a",
+    "mtime": 1789737408.7840075,
+    "seen": 1789738001.444839,
+    "ast_hash": "0694a6bfcd49125adafdcbf899681edc",
     "semantic_hash": ""
   },
   "src/agent/graph.py": {
@@ -342,9 +342,9 @@
     "semantic_hash": ""
   },
   "tests/test_gateway.py": {
-    "mtime": 1789790736.042674,
-    "seen": 1789791254.7726934,
-    "ast_hash": "be7afac7e2f10bfd4d6a481d168babc9",
+    "mtime": 1789662975.5106595,
+    "seen": 1789737309.9614747,
+    "ast_hash": "ba6371a87903ffc0477003366a66e944",
     "semantic_hash": ""
   },
   "tests/test_graph.py": {
@@ -555,24 +555,6 @@
     "mtime": 1789757151.5854647,
     "seen": 1789757655.7796571,
     "ast_hash": "236c10fb81bf26cd4c4fce86e8f0847e",
-    "semantic_hash": ""
-  },
-  "evals/economics.py": {
-    "mtime": 1789791023.3963356,
-    "seen": 1789791254.772555,
-    "ast_hash": "473a798142e449ced13eadc356d85cf3",
-    "semantic_hash": ""
-  },
-  "src/agent/usage.py": {
-    "mtime": 1789790615.9405527,
-    "seen": 1789791254.7726605,
-    "ast_hash": "a517974ba5f2cd30dbadcf0a3e947b95",
-    "semantic_hash": ""
-  },
-  "tests/eval/test_economics.py": {
-    "mtime": 1789790666.417462,
-    "seen": 1789791254.7726681,
-    "ast_hash": "f4228a62ea9b10ef3943b2dda2a4bec9",
     "semantic_hash": ""
   }
 }
