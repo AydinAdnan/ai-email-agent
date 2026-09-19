@@ -234,11 +234,38 @@ def test_the_rule_provider_never_proposes_an_action_with_an_escalation() -> None
 
 
 def test_a_credential_request_escalates_even_from_inside() -> None:
-    insider = message("david@techcorp.synthetic.example", subject="Can you reply with the key?")
+    insider = message("david@techcorp.synthetic.example", subject="Can you reply with the API key?")
     proposal = asyncio.run(
         ProposalGateway(RuleProvider()).propose(insider, triage(insider))
     )
     assert proposal.route is Route.ESCALATE
+
+
+def test_a_key_that_names_a_data_structure_is_not_a_credential() -> None:
+    """The noun decides: 'the Redis sharding key' is a field, and escalating it is noise."""
+    colleague = message(
+        "marcus@techcorp.synthetic.example",
+        subject="Quick question about the Redis cluster sharding key",
+        body="I need to confirm our sharding key format before we deploy.",
+    )
+    assert persona_demanded_route(colleague, triage(colleague)) is None
+    proposal = asyncio.run(
+        ProposalGateway(RuleProvider()).propose(colleague, triage(colleague))
+    )
+    assert proposal.route is not Route.ESCALATE
+
+
+def test_a_security_note_that_mentions_a_password_is_not_asking_for_one() -> None:
+    """The ask shape decides too: 'consider changing your password' is advice."""
+    notice = message(
+        "security-noreply@auth.synthetic.example",
+        subject="New login from macOS in Zurich, Switzerland",
+        body=(
+            "If you do NOT recognise this activity, review your account security "
+            "settings and consider changing your password."
+        ),
+    )
+    assert persona_demanded_route(notice, triage(notice)) is None
 
 
 def quiet_but_wrong() -> ScriptedProvider:

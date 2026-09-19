@@ -118,12 +118,23 @@ ACTION_BY_INTENT: Mapping[str, tuple[str, Mapping[str, Any]]] = {
 ESCALATING_INTENTS = frozenset({"financial request", "account verification", "attachment/document request"})
 
 # Persona boundary: no credential or secret disclosure under any circumstances, so an
-# ask for one escalates whoever sends it. An ask shape, not a keyword: a security notice
-# that merely mentions a password is not a request for one.
+# ask for one escalates whoever sends it. An ask shape, not a keyword, and the noun has
+# to be one a credential goes by: a security notice that merely mentions a password is
+# not a request for one, and a colleague's 'Redis sharding key' is a field name. Reading
+# a bare 'key' as a credential escalated an ordinary question about a data format.
+_CREDENTIAL_VERBS = r"(reply|send|share|forward|provide|give|confirm|paste|need|require|export)"
+
 CREDENTIAL_ASKS = re.compile(
-    r"(reply|send|share|forward|provide|give|confirm|paste|need|require)\b.{0,40}"
-    r"\b(key|password|passphrase|token|credential|secrets?|api key|mfa code)\b"
-    r"|(secret|api|access|private|production|stripe) key|\bsk_live\b|\bmfa code\b",
+    # A verb and a qualified credential: "reply with the API key".
+    _CREDENTIAL_VERBS + r"\b.{0,60}"
+    r"\b(api|secret|private|signing|encryption|production|stripe|access|auth|oauth|bearer"
+    r"|session|mfa|2fa|one-time|verification)\s+(key|keys|token|tokens|code|codes|secrets?)\b"
+    # A verb and the credential itself. Naming one in passing is not asking for one:
+    # a security notice that says to change a password is not a request for the password.
+    r"|" + _CREDENTIAL_VERBS + r"\b.{0,60}"
+    r"\b(password|passphrase|credentials?)\b"
+    # A literal secret is an ask wherever it appears: no mail carries one for another reason.
+    r"|\bsk_live\b",
     re.IGNORECASE,
 )
 

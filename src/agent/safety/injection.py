@@ -39,8 +39,45 @@ INJECTION_PATTERNS = (
     r"###\s+(System\s*Instruction|Instruction|Prompt)",
 )
 
+# Instructions aimed at the agent rather than at a person, which is the shape a stranger
+# uses to make the agent act: tell it it may, tell it what to run, or tell it what to
+# fetch out of the mailbox. These are deliberately NOT counted for every sender - a
+# colleague writing "please send over the deck" is making a request, and merchant mail
+# says "please reply to this email" - so they only count when the sender identity is
+# unverified, which is the line between a request and a stranger giving orders.
+AGENT_DIRECTIVE_PATTERNS = (
+    # Telling the agent it has permission, which no sender can grant.
+    r"\b(you are|you'?re|you have been)\s+(now\s+)?(fully\s+)?(authorized|permitted|approved)\b",
+    # Naming what the agent should do, in the imperative.
+    r"\b(please|kindly)\s+(reply|respond|send|forward|export|scan|run|execute|reveal"
+    r"|attach|delete|purge|label|archive|bcc|cc|provide|share|confirm)\b",
+    r"\b(reply|respond)\s+(back\s+)?with\b",
+    r"\b(run|execute)\s+(the\s+)?(following|this|attached|below)\b",
+    # Shell shapes: text meant to be executed, not read.
+    r"\|\s*(bash|sh|zsh|powershell|python)\b",
+    r"\b(curl|wget)\b[^\n]{0,80}\|\s*\w+",
+    # Reaching for what the mailbox holds rather than for the reader's attention.
+    r"\b(scan|search|read|export|summari[sz]e|forward)\s+(the\s+)?"
+    r"(user'?s?|my|their|his|her)\s+(emails?|inbox|mail|tokens?|keys?|files?|contacts?)\b",
+    r"\b(export|dump|exfiltrate|leak)\b[^\n]{0,40}\b(tokens?|keys?|credentials?|emails?|inbox)\b",
+    r"\b(bcc|fcc)\s*:",
+    # Going quiet about it.
+    r"\b(do not|don'?t)\s+(notify|tell|inform|alert|cc|mention)\b|\bsuppress all user\b",
+    r"\b(without|silently|silent)\b[^\n]{0,25}\b(notifying|telling|informing|user|approval)\b",
+    # Mailbox and system housekeeping a stranger has no business commissioning.
+    r"\b(clean\s?up|purge|empty|delete\s+all|free\s+up)\b[^\n]{0,30}"
+    r"\b(required|needed|now|immediately|messages?|mailbox|storage|space)\b",
+    r"\b(mailbox|storage|quota|disk)\b[^\n]{0,25}\b(critical|full|almost full|98%)\b",
+    r"\b(scheduled|run|build)\b[^\n]{0,20}\b(cron|crontab|systemd|webhook|daemon|maintenance)\b",
+)
+
 _COMPILED_INJECTION_RE = re.compile(
     "|".join(INJECTION_PATTERNS),
+    re.IGNORECASE,
+)
+
+_COMPILED_DIRECTIVE_RE = re.compile(
+    "|".join(AGENT_DIRECTIVE_PATTERNS),
     re.IGNORECASE,
 )
 
@@ -89,6 +126,21 @@ def _check_zero_width_chars(text: str) -> str | None:
     return None
 
 
+def _names_its_own_domain(sender: str, display_name: str) -> bool:
+    """Whether a display name names the domain it was sent from.
+
+    A firm describing itself - 'Ubuntu Security Team' from ubuntu.example - is not
+    claiming a role inside our organization, and reading it as one vetoed honest vendor
+    mail. Impersonation looks different: 'Google Workspace Security Team' from an
+    address that is not google.com is naming an organization it cannot prove.
+    """
+    domain = sender.split("@")[-1].strip().lower() if "@" in sender else ""
+    label = domain.split(".")[0]
+    if not label:
+        return False
+    return bool(re.search(rf"\b{re.escape(label)}\b", display_name, re.IGNORECASE))
+
+
 def _check_authority_claims(
     sender: str,
     display_name: str,
@@ -98,7 +150,8 @@ def _check_authority_claims(
 
     A display name is not authority. When an email claims an internal role we can
     only accept it if the sender address proves the same domain; an external
-    domain is a spoof and a missing or unparseable sender is unresolved.
+    domain is a spoof and a missing or unparseable sender is unresolved. An external
+    name that names its own domain is asking for nothing, so it is left alone.
     """
     if not display_name or not _AUTHORITY_ROLE_PATTERNS.search(display_name):
         return None
@@ -109,7 +162,9 @@ def _check_authority_claims(
             f"Unresolved authority: display name '{display_name}' claims an internal role "
             "but the sender identity cannot be verified"
         )
-    if sender_domain != user_domain.strip().lower():
+    if sender_domain != user_domain.strip().lower() and not _names_its_own_domain(
+        sender, display_name
+    ):
         return (
             f"Authority claim mismatch: external sender '{sender}' "
             f"claims internal role '{display_name}'"
@@ -121,9 +176,16 @@ def scan(
     text: str,
     sender: str = "",
     display_name: str = "",
-    user_domain: str = "example.com"
+    user_domain: str = "example.com",
+    sender_verified: bool = True,
 ) -> InjectionScanResult:
-    """Scan untrusted email content and headers for prompt injection indicators."""
+    """Scan untrusted email content and headers for prompt injection indicators.
+
+    ``sender_verified`` defaults to True, so a caller that knows nothing about the sender
+    gets the behaviour of a sender whose identity holds up: the directive patterns below
+    are for strangers, and assuming otherwise would veto ordinary mail that happens to
+    say "please reply". The floor passes the message's real verification state.
+    """
     signals: list[str] = []
 
     # 1. Check for zero-width steganography
@@ -147,6 +209,15 @@ def scan(
     spoof_signal = _check_authority_claims(sender, display_name, user_domain)
     if spoof_signal:
         signals.append(spoof_signal)
+
+    # 5. Check for instructions addressed to the agent, which only count from a sender
+    # whose identity the mailbox cannot vouch for.
+    if not sender_verified:
+        directives = {m.group(0).strip() for m in _COMPILED_DIRECTIVE_RE.finditer(text)}
+        for directive in sorted(directives):
+            signals.append(
+                f"Agent-directed instruction from an unverified sender: '{directive}'"
+            )
 
     if signals:
         return InjectionScanResult(

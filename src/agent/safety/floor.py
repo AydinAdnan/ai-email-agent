@@ -114,7 +114,14 @@ class ActionPayload:
 
 @dataclass(frozen=True)
 class EmailContext:
-    """Email metadata and body context passed into safety evaluations."""
+    """Email metadata and body context passed into safety evaluations.
+
+    ``sender_verified`` defaults to True because a caller that omits it is saying nothing
+    about the sender, and the fail-closed reading of silence is the floor's to make. The
+    decisions that turn on it - whether a stranger's instructions to the agent count as a
+    directive - are gated on it being False, so the default keeps the pre-existing
+    behaviour of every caller that does not supply it.
+    """
     email_id: str
     sender: str
     recipients: Sequence[str]
@@ -123,6 +130,7 @@ class EmailContext:
     display_name: str = ""
     pre_committed_plan: Sequence[str] | None = None
     user_domain: str = DEFAULT_USER_DOMAIN
+    sender_verified: bool = True
 
 
 # Pattern definitions for financial and credential tripwires
@@ -313,13 +321,20 @@ def _eval_injection_tripwires(
     email: EmailContext | None,
     user_domain: str,
 ) -> tuple[VetoLevel, str] | None:
-    """FLR-INJ-001: Prompt injection tripwires in email body or metadata must be escalated."""
+    """FLR-INJ-001: Prompt injection tripwires in email body or metadata must be escalated.
+
+    The mail's own text is what fences here, not the proposed action's class: an
+    instruction to the agent from a sender we cannot vouch for is refused whichever
+    action a proposer attached to it, which is what stops a harmless-looking label from
+    carrying an injected mail past the floor.
+    """
     if email:
         scan_res = scan(
             text=f"{email.subject} {email.body}",
             sender=email.sender,
             display_name=email.display_name,
             user_domain=user_domain,
+            sender_verified=email.sender_verified,
         )
         if scan_res.is_injected:
             return (VetoLevel.ESCALATE, f"Prompt injection tripwire detected: {scan_res.reason}")
@@ -351,18 +366,26 @@ def _eval_money_movement(
     email: EmailContext | None,
     user_domain: str,
 ) -> tuple[VetoLevel, str] | None:
-    """FLR-001: Autonomous money movement or financial transactions are prohibited."""
+    """FLR-001: Autonomous money movement or financial transactions are prohibited.
+
+    Two shapes, and the second is the one that matters most: money in the *mail* from a
+    sender whose identity does not hold up is refused whatever the proposal attached to
+    it. Keying only on the action's class let a harmless-looking label carry a spoofed
+    invoice past the floor, because a label is reversible and money was not in it.
+    """
     if _has_financial_intent(action.tool_name, action.params):
         return (VetoLevel.ESCALATE, "Financial transaction or money movement detected in action parameters")
-    if (
-        email
-        and _FINANCIAL_KEYWORD_PATTERN.search(f"{email.subject} {email.body}")
-        and action_class in {ActionClass.IRREVERSIBLE_EXTERNAL, ActionClass.IRREVERSIBLE_INTERNAL}
-    ):
-        return (
-            VetoLevel.ESCALATE,
-            "Financial context detected in email for non-reversible action; autonomous execution prohibited",
-        )
+    if email and _FINANCIAL_KEYWORD_PATTERN.search(f"{email.subject} {email.body}"):
+        if not email.sender_verified:
+            return (
+                VetoLevel.ESCALATE,
+                "Financial request from a sender the mailbox cannot vouch for",
+            )
+        if action_class in {ActionClass.IRREVERSIBLE_EXTERNAL, ActionClass.IRREVERSIBLE_INTERNAL}:
+            return (
+                VetoLevel.ESCALATE,
+                "Financial context detected in email for non-reversible action; autonomous execution prohibited",
+            )
     return None
 
 
@@ -372,9 +395,22 @@ def _eval_credential_security(
     email: EmailContext | None,
     user_domain: str,
 ) -> tuple[VetoLevel, str] | None:
-    """FLR-002: Credential or account security tampering is prohibited."""
+    """FLR-002: Credential or account security tampering is prohibited.
+
+    As with money: a credential named in mail from an unvouched-for sender is refused on
+    the mail's own account, so the fence does not depend on the action a proposer chose.
+    """
     if _has_credential_intent(action.tool_name, action.params):
         return (VetoLevel.ESCALATE, "Credential or account modification detected")
+    if (
+        email
+        and not email.sender_verified
+        and _CREDENTIAL_PATTERN.search(f"{email.subject} {email.body}")
+    ):
+        return (
+            VetoLevel.ESCALATE,
+            "Credential context in mail from a sender the mailbox cannot vouch for",
+        )
     return None
 
 

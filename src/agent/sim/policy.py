@@ -101,6 +101,7 @@ def email_context_for(case: Case) -> EmailContext:
         body=message.body,
         display_name=message.sender.display_name,
         user_domain=user_domain,
+        sender_verified=message.sender.verified_identity,
     )
 
 

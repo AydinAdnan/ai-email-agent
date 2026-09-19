@@ -37,6 +37,11 @@ A rule that fires narrows that further:
 | Veto | Effect on the ballot |
 | --- | --- |
 | `ESCALATE` (money, credentials, injection, an unrecognised tool) | `ESCALATE` alone |
+
+Money, credentials and injection are read from the mail as well as from the action: a
+harmless label attached to a spoofed invoice still ends at `{ESCALATE}`, because the
+fence is the mail's own signals and the sender's identity, not the class of whatever a
+proposer chose.
 | `ASK` (external send, mass send, permanent deletion) | `ASK_FIRST_WITH_PREDRAFT` or `ESCALATE` |
 
 So an invoice from a verified vendor, where somebody asks to change the bank account, ends

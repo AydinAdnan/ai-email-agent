@@ -62,21 +62,37 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "security alert",
         r"security alert|new login|login from|new sign-?in|sign-?in attempt|unusual activity"
-        r"|password (was )?changed|suspicious|vulnerability|\busn-\d",
+        r"|password (was )?changed|suspicious|vulnerability|\busn-\d"
+        # What a monitoring or identity address sends when something is failing, leaking
+        # or being locked, which is a security notice before it is a report.
+        r"|\bfatal\b|\bexception\b|\boutofmemory\b|\bcrash(ed)?\b|\b(alert|alarm)s?\b"
+        r"|secret scanning|\bleak(ed)?\b|\bbreach\b|revoked?|suspended|terminated"
+        r"|\bencryption key\b",
     ),
     (
         "cloud/AWS bill",
-        r"amazon web services (invoice|bill)|\baws\b.{0,40}(invoice|bill|usage)\b"
-        r"|\b(google )?cloud\b.{0,30}\binvoice\b|\bcloud (bill|usage)\b"
-        r"|infrastructure (invoice|bill)|usage (charges|report)\b",
+        # A cloud provider's own invoicing, named or not. It takes a billing word as well
+        # as a provider name, so a usage summary that asks for nothing stays what it is.
+        r"amazon web services (invoice|bill)|\baws\b.{0,60}(invoice|bill|balance|usage)"
+        r"|\b(azure|microsoft azure|google cloud|\bgcp\b|datadog|cloudwatch|cloud service)\b"
+        r".{0,60}\b(invoice|bill|billing statement|statement|charges|balance|amount due|"
+        r"past due)\b|\bcloud (bill|usage)\b|infrastructure (invoice|bill)",
     ),
     (
         # After the cloud bills, because an invoice from a verified billing sender is a
-        # bill; this is a stranger asking the user to move money.
+        # bill. This is a demand to move money - who to pay, where to send it - and an
+        # ask for a token or a key is a security matter, not a payment one.
         "financial request",
-        r"\bwire\b|bank transfer|gift card|remit|payment (is )?due|past due|transfer funds"
-        r"|outstanding (balance|invoice)|authorization token|access token|api key"
-        r"|duplicate charge|re-?commit",
+        r"\bwire\b|wire transfer|bank transfer|routing number|account number|\biban\b|\bswift\b"
+        r"|gift card|\bremit\b|transfer funds|duplicate charge|re-?commit"
+        # Asking *the reader* to change where money goes. A vendor's "update payment
+        # details" in a renewal notice is customer support, and it is possessive-marked
+        # so the two do not look alike.
+        r"|(update|change|send)\s+(your|the)\s+(bank|payment|billing|card)\s"
+        r"(details|information|account|number)\b"
+        # 'Payment is due' is deliberately absent: an invoice says exactly that, and an
+        # invoice is a receipt for money already owed, not a demand to move it.
+        r"|past due",
     ),
     (
         "attachment/document request",
@@ -88,7 +104,9 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "newsletter",
-        r"unsubscribe|newsletter|\bpromotions?\b|\bissue #\d|digest #\d|\bdigest\b"
+        # Bulk mail a reader did not ask for. A bare 'digest' is deliberately not here:
+        # a weekly metrics digest from a monitoring address is a report, not a publication.
+        r"unsubscribe|newsletter|\bpromotions?\b|\bissue #\d|digest #\d"
         r"|weekly (roundup|digest|issue)|\b\d+% (off|discount)|discount|webinar"
         r"|\bgrowth hacks?\b|last chance|release notes|\bpodcast\b|exclusive (offer|discount)",
     ),
@@ -98,23 +116,31 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "receipt",
+        # What a merchant sends once money has already moved: an amount, and no request.
         r"\breceipt\b|your (purchase|order)|order confirmation|booking confirmation"
-        r"|transaction (id|date)|payment (method|received)|confirmation #\w",
+        r"|flight confirmation|transaction (id|date)|payment (method|received)|confirmation #\w"
+        r"|thank you for your (payment|purchase|order)|\b(invoice|folio|statement)\b"
+        r".{0,60}(paid|\$\s?[\d,]+|\bpayment\b)",
     ),
     (
         "recruiter follow-up",
-        r"\brecruit|\bcandidate\b|\bhiring\b|opportunit(y|ies)|my client|compensation"
+        # Solicitation, not the word 'hiring': a colleague asking for a headcount
+        # estimate is asking for information.
+        r"\brecruit|\bcandidate\b|opportunit(y|ies)|my client|compensation"
         r"|\brole at\b|role - comp|principal architect",
     ),
     (
         "scheduling",
-        r"\bmeeting\b|\bcalendar\b|reschedul|\bavailability\b|catch ?up|\bsync\b"
-        r"|would you have time|lock in a time|planning session|this week|\bcall\b",
+        # A time with the reader, not a word that happens to appear in a report: a
+        # metrics digest says 'this week', a call for proposals says 'call'.
+        r"\bmeeting\b|\bcalendar\b|reschedul|\bavailability\b|catch ?up|would you have time"
+        r"|lock in a time|planning session|\bdeadline\b|\bpriorit(y|ies)\b|\bmeetup\b"
+        r"|\bjoin us\b|next week",
     ),
     (
         "customer support",
-        r"\bsupport\b|\bticket\b|case #|your (recent )?order|refund|renewal"
-        r"|\bsubscription\b|\blicense\b|expire",
+        r"\bsupport (team|ticket|request|plan|desk)\b|\bticket\b|case #|your (recent )?order"
+        r"|refund|renewal|\bsubscription\b|\blicense\b|expire|\bdeliverables?\b",
     ),
     (
         "information request",
@@ -130,7 +156,15 @@ _SERVICE_LOCAL_PARTS = frozenset(
         "reports", "security-noreply", "support",
     }
 )
-_MARKETING_LOCAL_PARTS = frozenset({"news", "newsletter", "marketing", "promo", "offers", "info", "community"})
+# Addresses that send *publications*: bulk mail a reader did not ask for. A monitoring
+# or reporting address is not one of them, which is what keeps a metrics digest a report.
+_MARKETING_LOCAL_PARTS = frozenset(
+    {
+        "news", "newsletter", "marketing", "promo", "offers", "info", "community",
+        "updates", "tips", "growth", "insights", "outreach", "sales", "digest",
+        "weekly", "editorial", "blog", "campaigns", "hello", "team",
+    }
+)
 _RECRUITER_MARKERS = re.compile(r"recruit|talent|careers|hiring|jobs", re.IGNORECASE)
 _BILLING_MARKERS = re.compile(r"billing|invoice|cloud|aws|payments", re.IGNORECASE)
 _AUTHORITY_NAMES = re.compile(
@@ -191,7 +225,7 @@ def triage(
 
     text = " ".join((message.subject, message.body)).strip()
     signals: list[str] = []
-    intent = _first_intent(text, signals)
+    intent = _first_intent(text, signals, local_part)
     relationship, confidence = _relationship(
         message, known, address, sender_domain, local_part, ours, intent, signals
     )
@@ -216,13 +250,28 @@ def intents_matching(text: str) -> tuple[str, ...]:
     )
 
 
-def _first_intent(text: str, signals: list[str]) -> str:
+def _first_intent(text: str, signals: list[str], local_part: str = "") -> str:
+    """The intent this mail's words point at, with the sender's shape as the tiebreak.
+
+    Words first: what a mail says beats who sent it. The fallback is the exception. A
+    mail with no marketing word in it at all - "Top Hacker News Stories of the Week" -
+    is still bulk mail when it arrives from a publisher's address, and the same shape
+    from a monitoring address is the report the fallback already names.
+    """
+    found = "information request"
     for intent, pattern in _INTENT_MARKERS:
         if re.search(pattern, text, re.IGNORECASE):
             signals.append(f"intent marker matched for '{intent}'")
-            return intent
-    signals.append("no intent marker matched; read as an information request")
-    return "information request"
+            found = intent
+            break
+    else:
+        signals.append("no intent marker matched; read as an information request")
+    if found == "information request" and local_part and _marketing_sender(local_part):
+        signals.append(
+            f"publisher sender shape '{local_part}' and no marketing words; read as bulk mail"
+        )
+        return "newsletter"
+    return found
 
 
 def _relationship(
