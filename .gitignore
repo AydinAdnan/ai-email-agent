@@ -34,3 +34,5 @@ artifacts/
 # directory is ignored entry by entry rather than wholesale.
 docs/*
 !docs/routes.md
+!docs/transcript1.md
+!docs/analysis.md
