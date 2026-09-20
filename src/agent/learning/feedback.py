@@ -270,6 +270,19 @@ def _claim_reading(
         # decision in front of the user is heard and not kept.
         return _nothing(f"Noted: {quote!r}. Nothing was stored: a rule needs the mail it came from.")
 
+    if not scope.resolved:
+        # The line names an action and no scope at all. The narrow reading tied to the mail
+        # in front of the user is offered - at the confidence that makes the echo ask
+        # whether it was meant more widely - and stored only once that is confirmed. It is
+        # never assumed: the schema refuses a rule about the whole mailbox nobody said.
+        narrow = _from_context(context)
+        if not narrow.resolved:
+            return _nothing(
+                f"Noted: {quote!r}. Nothing was stored: which mail this applies to is not "
+                "settled yet."
+            )
+        scope, anchor, confident = narrow, ScopeAnchor.CONTEXT, 0.6
+
     claim = Claim(
         claim_id=claim_id_for(quote, route, action_id, params, scope),
         type=ClaimType.CORRECTION

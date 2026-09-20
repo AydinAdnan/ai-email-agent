@@ -30,12 +30,23 @@ from typing import Any
 
 from agent.drafts import DRAFTING_TOOLS
 from agent.events import Message
-from agent.gateway import ProposalError, ProposalProvider, ProposalRequest, parse_proposal
+from agent.gateway import (
+    ProposalError,
+    ProposalProvider,
+    ProposalRequest,
+    build_provider,
+    parse_proposal,
+)
 from agent.safety.floor import Route
 from agent.triage import Triage
 from agent.usage import LEDGER, Ledger
 
 JEV_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
+
+# The suffix that puts the decision model in front of an endpoint: ``openrouter+jev``. It
+# rides on the provider name so one value selects the whole proposer, and it is resolved in
+# one place - :func:`proposing_provider` - so every surface that proposes reads it the same.
+JEV_RECIPE = "jev"
 DEFAULT_JEV_MODEL = "~typesafe/jev-latest"
 JEV_API_KEY_ENV = "OPENROUTER_API_KEY"
 DEFAULT_JEV_TIMEOUT = 20.0
@@ -256,6 +267,28 @@ class JevRouted:
         )
 
 
+def split_recipe(name: str) -> tuple[str, str]:
+    """An endpoint and the recipe riding on it: ``openrouter+jev`` -> ``(openrouter, jev)``."""
+    endpoint, _, recipe = str(name).partition("+")
+    return endpoint, recipe
+
+
+def proposing_provider(name: str, *, model: str | None = None) -> ProposalProvider:
+    """The proposer one name asks for: an endpoint, or an endpoint with Jev routing it.
+
+    The only place the ``+jev`` recipe is resolved, so the CLI commands, the eval run and
+    the sandbox all turn the same name into the same provider. The model id names the text
+    model either way; the decision model comes from ``WAJO_JEV_MODEL``.
+    """
+    endpoint, recipe = split_recipe(name)
+    provider = build_provider(endpoint, model=model)
+    if not recipe:
+        return provider
+    if recipe != JEV_RECIPE:
+        raise ProposalError(f"unknown recipe {name!r}; known: <endpoint>+{JEV_RECIPE}")
+    return route_by_jev(provider, model=os.environ.get("WAJO_JEV_MODEL") or None)
+
+
 def route_by_jev(
     provider: ProposalProvider,
     *,
@@ -386,11 +419,14 @@ __all__ = [
     "DRAFT_ACTION",
     "JEV_API_KEY_ENV",
     "JEV_ENDPOINT",
+    "JEV_RECIPE",
     "JEV_STAGE",
     "ROUTE_CRITERIA",
     "Jev",
     "JevAnswer",
     "JevError",
     "JevRouted",
+    "proposing_provider",
     "route_by_jev",
+    "split_recipe",
 ]

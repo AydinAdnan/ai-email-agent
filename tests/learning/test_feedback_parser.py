@@ -137,6 +137,19 @@ def test_the_whole_inbox_is_never_the_default_reading() -> None:
     assert "every future arrival" in widened.describe()
 
 
+def test_a_line_that_names_no_scope_is_offered_narrow_and_asked_about() -> None:
+    """An action with no scope word at all falls back to the mail in front of the user, at
+    the confidence that makes the echo ask - it is not a reason for the run to stop."""
+    reading = read("stop notifying me", CRON)
+    claim = reading.claim
+    assert claim is not None
+    assert claim.scope == ClaimScope(sender="status@acme.example", intent="information request")
+    assert claim.scope_anchor is ScopeAnchor.CONTEXT
+    assert claim.confidence < 0.8
+    assert "every future arrival" in (reading.prompt or "")
+    assert stored(reading, "yes", CRON) is not None
+
+
 def test_a_line_with_no_mail_in_front_of_it_is_heard_and_not_kept() -> None:
     """A claim has to name the mail it came from, so a rule stated with nothing in front
     of the user is not remembered rather than guessed into a global one."""

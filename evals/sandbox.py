@@ -56,7 +56,7 @@ from agent.gateway import (
 from agent.graph import GraphOutcome, GraphSession
 from agent.jev import proposing_provider, split_recipe
 from agent.learning.feedback import FeedbackContext, Reading, read_feedback
-from agent.loop import ScriptedReplies
+from agent.loop import SKIP_LINE, ScriptedReplies
 from agent.memory.claims import ClaimStore
 from agent.memory.consent import session_grant
 from agent.safety.floor import Route
@@ -385,33 +385,58 @@ class Arrival:
 TextCall = Callable[[str], Awaitable[str]]
 
 
-def text_call(provider: Any, *, stage: str, timeout: float = 90.0) -> TextCall:
-    """A plain-text caller for one model role, or a named failure when it has no transport."""
+def text_call(
+    provider: Any, *, stage: str, timeout: float = 90.0, attempts: int = 1
+) -> TextCall:
+    """A plain-text caller for one model role, or a named failure when it has no transport.
+
+    A stall is retried when the caller asks for it: the world's models stall every few dozen
+    calls, and a lost arrival costs more than the wait does when the mailbox has to hold one
+    round of every brief in each half. A refusal from the provider is not retried - it is an
+    answer, and asking again just spends the same error twice.
+    """
 
     async def call(prompt: str) -> str:
-        try:
-            return await asyncio.wait_for(provider.text(prompt, stage=stage), timeout)
-        except TimeoutError as error:
-            raise SandboxError(f"the {stage} call timed out after {timeout:.0f}s") from error
-        except ProposalError:
-            raise
-        except Exception as error:
-            raise SandboxError(f"the {stage} call failed: {type(error).__name__}: {error}") from error
+        for attempt in range(1, attempts + 1):
+            try:
+                return await asyncio.wait_for(provider.text(prompt, stage=stage), timeout)
+            except TimeoutError as error:
+                if attempt == attempts:
+                    raise SandboxError(
+                        f"the {stage} call timed out after {timeout:.0f}s"
+                    ) from error
+            except ProposalError:
+                raise
+            except Exception as error:
+                raise SandboxError(
+                    f"the {stage} call failed: {type(error).__name__}: {error}"
+                ) from error
+        raise SandboxError(f"the {stage} call produced nothing")  # unreachable
 
     return call
 
 
+def drawn_briefs(count: int, rng: random.Random) -> list[Scenario]:
+    """`count` briefs, every brief of the set before any of them comes round again."""
+    drawn: list[Scenario] = []
+    while len(drawn) < count:
+        one_round = list(SCENARIOS)
+        rng.shuffle(one_round)
+        drawn.extend(one_round)
+    return drawn[:count]
+
+
 async def write_mailbox(
     call: TextCall, count: int, *, rng: random.Random, notes: IO[str] | None = None
-) -> tuple[tuple[Arrival, ...], tuple[str, ...]]:
-    """Write `count` fresh arrivals, walking the briefs in a shuffled order.
+) -> tuple[tuple[Arrival, ...], tuple[str, ...], int]:
+    """Write `count` fresh arrivals, then say how many of them the learner is taught on.
 
-    Every round covers every brief exactly once, and each round is shuffled on its own. That
-    matters downstream: the mailbox is cut in half, so a count of twice the briefs puts each
-    class of mail in the half the learner is taught on *and* in the half it has never seen -
-    which is what makes one correction about a class measurable on the mail that follows it.
-    Shuffling the whole list at once would let a brief fall only in one half or only in the
-    other, and the per-class comparison would be counting mail that was never decided.
+    The briefs are drawn twice, one round for the learning half and one for the half decided
+    cold, so every class of mail appears in both halves - which is what makes one correction
+    about a class measurable on the mail that arrives after it. Drawing them as one list does
+    not promise that, and it puts the split at half the arrivals that survived, so a single
+    lost arrival shifts the boundary and can take a whole class out of the half that was
+    meant to learn from it.
 
     A generation that answers with something unusable loses that arrival and says so,
     rather than inventing a replacement for it: a mailbox quietly smaller than asked for
@@ -420,15 +445,14 @@ async def write_mailbox(
     One line per arrival, because a model takes half a minute to write one and thirty of
     them are ten minutes of a terminal that would otherwise look hung.
     """
+    to_learn = count // 2
+    plan: list[tuple[Scenario, bool]] = [
+        (scenario, True) for scenario in drawn_briefs(to_learn, rng)
+    ] + [(scenario, False) for scenario in drawn_briefs(count - to_learn, rng)]
     arrivals: list[Arrival] = []
     failures: list[str] = []
-    briefs: list[Scenario] = []
-    while len(briefs) < count:
-        drawn = list(SCENARIOS)
-        rng.shuffle(drawn)
-        briefs.extend(drawn)
-    briefs = briefs[:count]
-    for index, scenario in enumerate(briefs, start=1):
+    learning = 0
+    for index, (scenario, teaches) in enumerate(plan, start=1):
         prompt = generator_prompt(scenario, rng=rng)
         started = time.monotonic()
         try:
@@ -449,7 +473,8 @@ async def write_mailbox(
                 sequence_index=len(arrivals) + 1,
             )
         )
-    return tuple(arrivals), tuple(failures)
+        learning += 1 if teaches else 0
+    return tuple(arrivals), tuple(failures), learning
 
 
 # --------------------------------------------------------------------------------------
@@ -583,10 +608,47 @@ class ModelUser:
             recorded_at=datetime.now(UTC),
         )
 
+    def own_line(self, decision: Decision) -> tuple[str, ...]:
+        """What the owner says when the model playing them cannot answer at all.
+
+        A stalled answer costs this one reply, never the run: the mailbox was written and
+        paid for long before an ask happens. When a standing preference was due it is typed
+        here, so the half that was meant to teach still teaches; otherwise the owner passes
+        on the decision, which is what a person who says nothing at all means.
+        """
+        teaching = self.standing_line(decision.case_id)
+        if teaching:
+            self.taught.add(self.classes[decision.case_id])
+            return (teaching, CONFIRM_LINE)
+        return (SKIP_LINE,)
+
+    def _without_the_model(self, decision: Decision, error: Exception) -> tuple[str, ...]:
+        """The owner's own words stand in for the model's, and the run says which it used."""
+        lines = self.own_line(decision)
+        _note(
+            self.notes,
+            "    ",
+            f"the owner model could not answer for {decision.case_id} ({error}), so the "
+            f"owner answered instead: {lines[0]!r}",
+        )
+        return lines
+
     async def approve(self, decision: Decision, message: Message) -> bool:
         """Whether the draft on the table may be saved. Nothing is approved by default."""
         ask = self._ask_text(decision, message, template=USER_DECISION)
-        payload = await self._json(ask, where=f"the approval for {decision.case_id}")
+        try:
+            payload = await self._json(ask, where=f"the approval for {decision.case_id}")
+        except (SandboxError, ProposalError) as error:
+            # A held draft the owner never got to see stays held. Approving on the model's
+            # silence would write the number the run exists to measure with an invention.
+            self.refusals += 1
+            _note(
+                self.notes,
+                "    ",
+                f"the owner model could not answer for {decision.case_id} ({error}), so the "
+                "draft was left alone",
+            )
+            return False
         reply = str(payload.get("reply", "")).strip()
         if reply:
             self.lines.append(f"{decision.case_id}: {reply}")
@@ -607,7 +669,11 @@ class ModelUser:
 
         async def feed(index: int, decision: Decision) -> None:
             message = view.open(decision.case_id).event.message
-            for line in await self.lines_for(decision, message):
+            try:
+                lines = await self.lines_for(decision, message)
+            except (SandboxError, ProposalError) as error:
+                lines = self._without_the_model(decision, error)
+            for line in lines:
                 queue.put_nowait(line)
 
         return feed
@@ -1089,20 +1155,24 @@ async def run_sandbox(
         f"writing the mailbox: {count} model call(s) with "
         f"{getattr(writer, 'label', writer.name)}, about half a minute each",
     )
-    arrivals, failures = await write_mailbox(
-        text_call(writer, stage="sandbox/writer"), count, rng=rng, notes=notes
+    arrivals, failures, learning = await write_mailbox(
+        text_call(writer, stage="sandbox/writer", attempts=2),
+        count,
+        rng=rng,
+        notes=notes,
     )
-    if len(arrivals) < 4:
+    if learning < 2 or len(arrivals) - learning < 2:
         raise SandboxError(
-            f"the writer produced {len(arrivals)} usable arrival(s) out of {count}: "
-            + ("; ".join(failures) or "nothing was written")
+            f"the writer kept {learning} arrival(s) for the half that learns and "
+            f"{len(arrivals) - learning} for the half decided cold, out of {count}: both "
+            "halves need mail for the run to say anything about what was taught "
+            + ("; ".join(failures) or "")
         )
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise SandboxError(f"cannot make the artifact directory {out_dir}: {error}") from error
     mailbox_path = _write_mailbox_file(out_dir / "mailbox.jsonl", arrivals)
-    half = len(arrivals) // 2
     _note(
         notes,
         "",
@@ -1112,11 +1182,12 @@ async def run_sandbox(
     _note(
         notes,
         "",
-        f"split: {half} to learn on, {len(arrivals) - half} to be decided cold",
+        f"split: {learning} to learn on, {len(arrivals) - learning} to be decided cold",
     )
     for failure in failures:
         _note(notes, "     ", f"lost: {failure}")
-    calibration_arrivals, autonomous_arrivals = arrivals[:half], arrivals[half:]
+    calibration_arrivals = arrivals[:learning]
+    autonomous_arrivals = arrivals[learning:]
     cal_view = Manifest.from_mail_rows(
         [arrival.row() for arrival in calibration_arrivals], source="<generated: calibration>"
     ).view(Lane.CALIBRATION)

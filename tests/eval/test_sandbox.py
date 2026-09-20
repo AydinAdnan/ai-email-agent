@@ -195,6 +195,15 @@ class FakeModel:
         )
 
 
+class StalledUser(FakeModel):
+    """The endpoint that answers everything except the owner's own questions."""
+
+    async def text(self, prompt: str, *, system: str = "", stage: str = "") -> str:
+        if stage == "sandbox/user":
+            raise TimeoutError(stage)
+        return await super().text(prompt, system=system, stage=stage)
+
+
 def run(tmp_path: Path, *, count: int = 6, strict: bool = False):
     return _run(tmp_path, count=count, strict=strict)
 
@@ -450,6 +459,26 @@ def test_the_owner_says_a_standing_preference_once_and_not_again(tmp_path: Path)
             arrival.scenario.name for arrival in outcome.arrivals if arrival.case_id in decided
         }
         assert classes == {scenario.name for scenario in SCENARIOS}
+
+
+def test_a_stalled_owner_model_does_not_take_the_run_with_it(tmp_path: Path):
+    """A model that cannot answer as the owner costs one reply, not the whole mailbox.
+
+    The mailbox is written and paid for before any ask happens, so that is the worst moment
+    to lose the run - and the standing preferences still have to be taught, or the second
+    half gets measured against a mailbox nobody taught.
+    """
+    notes = io.StringIO()
+    outcome = _run_with(
+        tmp_path,
+        count=2 * len(SCENARIOS),
+        model=StalledUser(strict=True),
+        notes=notes,
+        control=False,
+    )
+    assert outcome.autonomous.processed == len(SCENARIOS)
+    assert outcome.rules, "the owner's own line was never typed in place of the model's"
+    assert "the owner model could not answer" in notes.getvalue()
 
 
 def test_the_control_walks_the_mailbox_with_nothing_remembered(tmp_path: Path):
