@@ -173,6 +173,26 @@ _AUTHORITY_NAMES = re.compile(
     re.IGNORECASE,
 )
 
+# Addresses that send *machine mail*: a build result, a pull request opening, a widget
+# publishing a new version. A reader cannot answer any of it, so where such a mail asks
+# nothing it is bulk mail and gets filed, not a question that earns a drafted reply. A
+# notice that reports a fault is not bulk - it asks the reader to know something - which
+# is what keeps a production alert a notification.
+_MACHINE_LOCAL_PARTS = frozenset(
+    {
+        "notifications", "notification", "notify", "alerts", "alert", "builds", "build",
+        "ci", "no-reply", "noreply", "donotreply", "do-not-reply", "bot", "monitoring",
+        "status", "ping",
+    }
+)
+_FAULT_WORDS = re.compile(
+    r"\bfatal\b|\bcritical\b|\bexception\b|\boutofmemory\b|\bcrash(ed|es|ing)?\b"
+    r"|\bincident\b|\boutage\b|\bdegraded\b|\bbreach\b|\bvulnerab\w*\b|\badvisor(?:y|ies)\b"
+    r"|\bsuspend(?:ed|ing)?\b|\brevok\w*\b|\balarms?\b|\balerts?\b|\bfail(?:ed|ure|ing|s)?\b"
+    r"|\bspike\b|\bexpir\w*\b|\baction required\b|\bunusual\b|\bwarning\b|\boverdue\b",
+    re.IGNORECASE,
+)
+
 MONEY = re.compile(r"\$\s?([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
 # The persona policy's synthetic threshold: receipts at or below it need no
 # notification. It is config, not a label, and Commit 3.x keeps it in one place.
@@ -266,11 +286,18 @@ def _first_intent(text: str, signals: list[str], local_part: str = "") -> str:
             break
     else:
         signals.append("no intent marker matched; read as an information request")
-    if found == "information request" and local_part and _marketing_sender(local_part):
-        signals.append(
-            f"publisher sender shape '{local_part}' and no marketing words; read as bulk mail"
-        )
-        return "newsletter"
+    if found == "information request" and local_part:
+        if _marketing_sender(local_part):
+            signals.append(
+                f"publisher sender shape '{local_part}' and no marketing words; read as bulk mail"
+            )
+            return "newsletter"
+        if _machine_sender(local_part) and not _FAULT_WORDS.search(text):
+            signals.append(
+                f"machine sender shape '{local_part}' reporting no fault; read as bulk mail "
+                "the reader cannot answer"
+            )
+            return "newsletter"
     return found
 
 
@@ -347,6 +374,12 @@ def _relationship(
 
     signals.append("verified external sender with no distinguishing marker")
     return "vendor", 0.5
+
+
+def _machine_sender(local_part: str) -> bool:
+    """Whether an address's local part reads as a machine that sends notifications."""
+    parts = {local_part, *local_part.split(".")}
+    return bool(_MACHINE_LOCAL_PARTS & parts)
 
 
 def _marketing_sender(local_part: str) -> bool:

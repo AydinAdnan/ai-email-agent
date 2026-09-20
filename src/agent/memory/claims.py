@@ -3,15 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from agent.memory.consent import Capability, ConsentRequired, Grant
 from agent.safety.floor import Route
+
+# A rule nobody has restated in this long is reported for review. It is not dropped on its
+# own: what is in force has to be reproducible, and a wall clock quietly retiring rules
+# would make two runs of the same case set decide differently.
+RULE_TTL_DAYS = 180.0
 
 
 class ClaimError(ValueError):
@@ -128,12 +133,24 @@ class ClaimStore:
     check reads.
     """
 
-    def __init__(self, grant: Grant | None = None, *, path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        grant: Grant | None = None,
+        *,
+        path: Path | str | None = None,
+        ttl_days: float = 0.0,
+    ) -> None:
         self.grant = grant if grant is not None else Grant(capability=Capability.LEARN)
         self.path = Path(path) if path is not None else None
+        # How long a rule stays in force when a run asks for a horizon at all. Zero means
+        # forever, which is the default: retiring a rule has to be something a run asked
+        # for rather than something a clock did behind it.
+        self.ttl_days = max(0.0, float(ttl_days))
         # Why a named file was neither read nor written, when consent for learning is
         # not there. A run reads this out; it does not fail over it.
         self.refusal = ""
+        # How many rules a run retired for being stale, for the run to report.
+        self.retired = 0
         self._claims: list[Claim] = []
         self.loaded = self.load()
 
@@ -155,6 +172,32 @@ class ClaimStore:
             if line.strip()
         ]
         return len(self._claims)
+
+    def expired(self, *, at: datetime | None = None) -> tuple[Claim, ...]:
+        """The rules that have gone stale: in force, but nobody has restated them in a while.
+
+        Reported rather than dropped. A rule the user stated once is still their word, and
+        a run that silently retired it would be deciding on a preference nobody withdrew.
+        """
+        moment = at or datetime.now(UTC)
+        horizon = timedelta(days=self.ttl_days or RULE_TTL_DAYS)
+        return tuple(
+            claim
+            for claim in self._claims
+            if claim.active and moment - _moment(claim.recorded_at) > horizon
+        )
+
+    def retire(self, claims: Iterable[Claim], *, reason: str = "expired") -> int:
+        """Mark rules as superseded, asked for by a run rather than decided by a clock."""
+        wanted = {claim.claim_id for claim in claims}
+        if not wanted:
+            return 0
+        self._claims = [
+            replace(claim, superseded_by=reason) if claim.claim_id in wanted else claim
+            for claim in self._claims
+        ]
+        self.retired += len(wanted)
+        return len(wanted)
 
     def save(self) -> int:
         """Write every claim to the store's file, one JSON object per line.
@@ -205,17 +248,24 @@ class ClaimStore:
         return claim
 
     def matching(self, *, sender: str = "", domain: str = "", intent: str = "") -> tuple[Claim, ...]:
-        """The claims in force that bear on one mail, narrowest first.
+        """The claims in force that bear on one mail, narrowest first, newest after that.
 
         A claim with no scope bears on every mail; a claim scoped to something else does
-        not bear on this one.
+        not bear on this one. Two rules about the same mail are both in force, so the
+        order settles which is read first: the narrower scope wins, and the more recent
+        instruction wins against an older one of the same width.
         """
         bearing = [
             claim
             for claim in self._claims
             if claim.active and _bears_on(claim, sender=sender, domain=domain, intent=intent)
         ]
-        return tuple(sorted(bearing, key=lambda claim: len(claim.scope.as_key())))
+        return tuple(
+            sorted(
+                bearing,
+                key=lambda claim: (len(claim.scope.as_key()), -_moment(claim.recorded_at)),
+            )
+        )
 
 
 def claim_id_for(
@@ -295,6 +345,11 @@ def _bears_on(claim: Claim, *, sender: str, domain: str, intent: str) -> bool:
     if scope.intent:
         return scope.intent.lower() == intent.lower()
     return True
+
+
+def _moment(when: datetime) -> float:
+    """A timestamp as a number, so a naive and an aware one can still be compared."""
+    return (when if when.tzinfo is not None else when.replace(tzinfo=UTC)).timestamp()
 
 
 def _require_text(value: str, field_name: str) -> None:

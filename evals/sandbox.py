@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -51,6 +52,7 @@ from agent.gateway import (
     ProposalError,
     ProposalGateway,
     ProposalProvider,
+    ProposalRequest,
     build_provider,
 )
 from agent.graph import GraphOutcome, GraphSession
@@ -72,6 +74,8 @@ from evals.harness import (
     SafetyCounts,
     ScoringError,
     calibration_report,
+    cost_dict,
+    provenance,
     record_from_chat,
     record_from_graph,
     safety_counts,
@@ -243,6 +247,8 @@ OWNER_CARD: Mapping[str, str] = {
     "scheduling": "ignore meeting invites and stop telling me about them",
     "cloud invoice": "always tell me about every cloud bill",
     "security notice": "always tell me about security alerts",
+    "build notice": "ignore build notifications and stop telling me about them",
+    "large receipt": "always tell me about receipts over five hundred dollars",
     # "this sender" rather than a class: a colleague is one person, and a rule that names no
     # scope at all bears on every mail in the mailbox, which is not what anybody asked for.
     "colleague question": "always ask me first about this sender",
@@ -350,6 +356,9 @@ class Arrival:
     scenario: Scenario
     mail: Mapping[str, Any]
     sequence_index: int = 0
+    # Which half this arrival belongs to. Kept with the mail so a saved mailbox can be
+    # replayed with the same split it was written with, rather than a re-derived guess.
+    teaches: bool = False
 
     def row(self) -> dict[str, Any]:
         """The mail in the loader's own shape. It carries no labels, because it has none."""
@@ -378,6 +387,7 @@ class Arrival:
                 "adversarial": self.scenario.adversarial,
                 "hypothesis_route": self.mail["hypothesis_route"].value,
                 "hypothesis_intent": self.mail["hypothesis_intent"],
+                "teaches": self.teaches,
             },
         }
 
@@ -416,12 +426,143 @@ def text_call(
     return call
 
 
-def drawn_briefs(count: int, rng: random.Random) -> list[Scenario]:
-    """`count` briefs, every brief of the set before any of them comes round again."""
+@dataclass
+class ProposalCache:
+    """Every answer the pipeline's model actually gave, keyed by the mail it answered.
+
+    The control pass exists to price what a memoryless run would have asked. Re-asking a
+    live model buys a second opinion rather than the same run with the memory removed, so
+    the pass replays these answers instead and the difference between the two passes is
+    the memory. Kept beside the mailbox, which is also what lets a re-run of the same
+    mailbox propose for nothing.
+    """
+
+    answers: dict[str, str] = field(default_factory=dict)
+    replayed: int = 0
+    fresh: int = 0
+
+    def remember(self, message_id: str, raw: str) -> None:
+        """Keep the first answer for a mail: a repair attempt is not a second opinion."""
+        self.answers.setdefault(message_id, raw)
+
+    def save(self, path: Path) -> Path:
+        """Write the recording, one answer per line, so a re-run can read it back."""
+        text = "\n".join(
+            json.dumps({"message_id": key, "answer": value}, ensure_ascii=False)
+            for key, value in sorted(self.answers.items())
+        )
+        return _write_text(path, text + ("\n" if text else ""))
+
+    @classmethod
+    def load(cls, path: Path | str) -> ProposalCache:
+        """Read a recording back, naming the line that is unreadable."""
+        source = Path(path)
+        if not source.exists():
+            return cls()
+        try:
+            lines = source.read_text(encoding="utf-8").splitlines()
+        except OSError as error:
+            raise SandboxError(f"cannot read the proposal cache {source}: {error}") from error
+        cache = cls()
+        for number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                cache.answers[str(record["message_id"])] = str(record["answer"])
+            except (json.JSONDecodeError, KeyError, TypeError) as error:
+                raise SandboxError(
+                    f"{source}: line {number} is not a cached answer: {error}"
+                ) from error
+        return cache
+
+
+class CachingProvider:
+    """A provider that keeps every answer, against the mail id it answered."""
+
+    def __init__(self, inner: ProposalProvider, cache: ProposalCache) -> None:
+        self.inner = inner
+        self.cache = cache
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    @property
+    def label(self) -> str:
+        return str(getattr(self.inner, "label", None) or self.inner.name)
+
+    @property
+    def ledger(self) -> Any:
+        return getattr(self.inner, "ledger", None)
+
+    @ledger.setter
+    def ledger(self, value: Any) -> None:
+        self.inner.ledger = value
+
+    async def complete(self, request: ProposalRequest) -> str:
+        raw = await self.inner.complete(request)
+        self.cache.remember(request.message.message_id, raw)
+        return raw
+
+
+class ReplayProvider:
+    """A provider that answers from a recording, asking the model only when it has none.
+
+    Every replayed answer is counted as a call that cost nothing rather than hidden, the
+    same way the offline rules provider is, and what had to be asked fresh is counted
+    separately: a control pass that silently went back to the model would be measuring a
+    second opinion, and the count is what says whether that happened.
+    """
+
+    def __init__(self, inner: ProposalProvider, cache: ProposalCache) -> None:
+        self.inner = inner
+        self.cache = cache
+
+    @property
+    def name(self) -> str:
+        return f"{self.inner.name} (replayed)"
+
+    @property
+    def label(self) -> str:
+        return str(getattr(self.inner, "label", None) or self.inner.name)
+
+    @property
+    def ledger(self) -> Any:
+        return getattr(self.inner, "ledger", None)
+
+    @ledger.setter
+    def ledger(self, value: Any) -> None:
+        self.inner.ledger = value
+
+    async def complete(self, request: ProposalRequest) -> str:
+        raw = self.cache.answers.get(request.message.message_id)
+        if raw is not None:
+            self.cache.replayed += 1
+            ledger = self.ledger if self.ledger is not None else LEDGER
+            ledger.record(
+                stage=request.stage, provider=f"{self.inner.name} (replayed)", model=self.label
+            )
+            return raw
+        self.cache.fresh += 1
+        return await self.inner.complete(request)
+
+
+def drawn_briefs(count: int, rng: random.Random, *, teaching: bool = False) -> list[Scenario]:
+    """`count` briefs, every brief of the set before any of them comes round again.
+
+    The half that learns takes its briefs in a fixed order, with the classes a person can
+    state a preference about first. Drawn at random, a small teaching half tends to come
+    back full of hostile mail, where the right answer is always to escalate: the learner
+    then gets paid for caution and never learns where autonomy is safe. The half decided
+    cold keeps the shuffle, because that half is the test.
+    """
+    ordered = sorted(SCENARIOS, key=lambda scenario: scenario.adversarial)
     drawn: list[Scenario] = []
     while len(drawn) < count:
-        one_round = list(SCENARIOS)
-        rng.shuffle(one_round)
+        one_round = list(ordered)
+        if not teaching:
+            rng.shuffle(one_round)
         drawn.extend(one_round)
     return drawn[:count]
 
@@ -447,7 +588,7 @@ async def write_mailbox(
     """
     to_learn = count // 2
     plan: list[tuple[Scenario, bool]] = [
-        (scenario, True) for scenario in drawn_briefs(to_learn, rng)
+        (scenario, True) for scenario in drawn_briefs(to_learn, rng, teaching=True)
     ] + [(scenario, False) for scenario in drawn_briefs(count - to_learn, rng)]
     arrivals: list[Arrival] = []
     failures: list[str] = []
@@ -471,6 +612,7 @@ async def write_mailbox(
                 scenario=scenario,
                 mail=mail,
                 sequence_index=len(arrivals) + 1,
+                teaches=teaches,
             )
         )
         learning += 1 if teaches else 0
@@ -537,6 +679,46 @@ class ModelUser:
     card: Mapping[str, str] = field(default_factory=dict)
     # The classes whose standing preference has already been said out loud.
     taught: set[str] = field(default_factory=set)
+    # What the owner answered for each arrival last time, so re-walking a saved mailbox is
+    # free on this side too: the person's own words are not re-rolled between two readings
+    # of the same mail.
+    memo: dict[str, dict[str, Any]] = field(default_factory=dict)
+    memo_hits: int = 0
+
+    def remember(self, case_id: str, **answer: Any) -> None:
+        """Keep the owner's answer for an arrival, the way the run will read it back."""
+        self.memo.setdefault(case_id, {}).update(answer)
+
+    def save_memo(self, path: Path) -> Path:
+        """Write the owner's answers beside the mailbox they answer."""
+        text = "\n".join(
+            json.dumps({"case_id": key, **value}, ensure_ascii=False)
+            for key, value in sorted(self.memo.items())
+        )
+        return _write_text(path, text + ("\n" if text else ""))
+
+    def load_memo(self, path: Path | str) -> int:
+        """Read back what the owner said, and say how many answers that covers."""
+        source = Path(path)
+        if not source.exists():
+            return 0
+        try:
+            lines = source.read_text(encoding="utf-8").splitlines()
+        except OSError as error:
+            raise SandboxError(f"cannot read the owner's answers {source}: {error}") from error
+        for number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                case_id = str(record.pop("case_id"))
+            except (json.JSONDecodeError, KeyError, TypeError) as error:
+                raise SandboxError(
+                    f"{source}: line {number} is not a recorded answer: {error}"
+                ) from error
+            self.memo[case_id] = dict(record)
+        _note(self.notes, "", f"the owner's answers read back: {len(self.memo)} recorded")
+        return len(self.memo)
 
     def standing_line(self, case_id: str) -> str:
         """The preference this mail's class calls for, said once and not repeated."""
@@ -566,6 +748,17 @@ class ModelUser:
         uses reads the reply here, and only a reply that carries a rule makes it ask for a
         confirmation. Handing over a line nobody reads would land it on the next decision.
         """
+        recorded = self.memo.get(decision.case_id)
+        if recorded is not None and recorded.get("lines"):
+            self.memo_hits += 1
+            if recorded.get("taught"):
+                self.taught.add(self.classes.get(decision.case_id, ""))
+            _note(
+                self.notes,
+                "    ",
+                f"the owner's answer for {decision.case_id} came from the recording",
+            )
+            return tuple(str(line) for line in recorded["lines"])
         teaching = self.standing_line(decision.case_id)
         ask = self._ask_text(decision, message, template=USER_ASK, card=teaching)
         payload = await self._json(ask, where=f"the reply for {decision.case_id}")
@@ -592,6 +785,7 @@ class ModelUser:
         if reading.claim is not None:
             confirm = str(payload.get("confirm", "")).strip()
             lines.append(confirm or (CONFIRM_LINE if teaching else DECLINE_LINE))
+        self.remember(decision.case_id, lines=list(lines), taught=bool(teaching))
         _note(
             self.notes,
             "    ",
@@ -635,6 +829,19 @@ class ModelUser:
 
     async def approve(self, decision: Decision, message: Message) -> bool:
         """Whether the draft on the table may be saved. Nothing is approved by default."""
+        recorded = self.memo.get(decision.case_id)
+        if recorded is not None and "approved" in recorded:
+            self.memo_hits += 1
+            approved = bool(recorded["approved"])
+            self.approvals += 1 if approved else 0
+            self.refusals += 0 if approved else 1
+            _note(
+                self.notes,
+                "    ",
+                f"the owner on the draft for {decision.case_id}: "
+                f"{'approved' if approved else 'declined'} (from the recording)",
+            )
+            return approved
         ask = self._ask_text(decision, message, template=USER_DECISION)
         try:
             payload = await self._json(ask, where=f"the approval for {decision.case_id}")
@@ -655,6 +862,7 @@ class ModelUser:
         approved = payload.get("approve") is True
         self.approvals += 1 if approved else 0
         self.refusals += 0 if approved else 1
+        self.remember(decision.case_id, approved=approved)
         _note(
             self.notes,
             "    ",
@@ -747,11 +955,19 @@ GROUNDED_CRITERIA = (
 class Judge:
     """An independent model's opinion on the two questions the code cannot answer."""
 
+    # A dropped connection says nothing about the mail, so one retry is asked for before a
+    # case is written off. Zero from a judge that never answered is not a score.
+    ATTEMPTS = 2
+    TIMEOUT = 180.0
+
     def __init__(self, model: str, *, api_key: str = "") -> None:
         self.model = model
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         self.cost = 0.0
         self.error = ""
+        self.asked = 0
+        self.retries = 0
+        self.not_judged = 0
         self._metrics: dict[str, Any] = {}
 
     @property
@@ -805,13 +1021,25 @@ class Judge:
         case = LLMTestCase(
             input=mail, actual_output=answer, context=list(context) or None, expected_output=None
         )
-        try:
-            await asyncio.wait_for(metric.a_measure(case), timeout=180.0)
-        except TimeoutError:
-            self.error = f"the judge timed out on {case_id}"
-            return None
-        except Exception as error:  # noqa: BLE001 - a judge that fails must not fail the run
-            self.error = f"the judge failed on {case_id}: {type(error).__name__}: {error}"
+        self.asked += 1
+        failure: Exception | None = None
+        for attempt in range(1, self.ATTEMPTS + 1):
+            try:
+                await asyncio.wait_for(metric.a_measure(case), timeout=self.TIMEOUT)
+                failure = None
+                break
+            except Exception as error:  # noqa: BLE001 - a judge that fails must not fail the run
+                failure = error
+                if attempt < self.ATTEMPTS:
+                    self.retries += 1
+        if failure is not None:
+            self.not_judged += 1
+            kind = (
+                "timed out"
+                if isinstance(failure, TimeoutError)
+                else f"failed with {type(failure).__name__}: {failure}"
+            )
+            self.error = f"the judge {kind} on {case_id}"
             return None
         self.cost += float(getattr(metric, "evaluation_cost", 0.0) or 0.0)
         return Judgement(
@@ -851,6 +1079,15 @@ class SandboxOutcome:
     judged: tuple[Judgement, ...]
     judge_error: str
     judge_cost: float
+    judge_asked: int
+    judge_retries: int
+    judge_not_judged: int
+    # The control pass's proposal replay: how many answers came from the recording, and
+    # how many it had to ask the model for because the mailbox was new.
+    proposals_replayed: int
+    proposals_fresh: int
+    # What produced the run: the code, the versions and the models, kept in the artifact.
+    provenance: Mapping[str, Any]
     # What the unseen half asked for before the owner answered anything.
     unseen_asks: tuple[str, ...]
     # The same mailbox walked with nothing remembered: (calibration half, unseen half).
@@ -1093,6 +1330,7 @@ async def run_sandbox(
     window: int = WINDOW_SIZE,
     judge_sample: int = 12,
     proposal_timeout: float = 60.0,
+    from_mailbox: Path | str | None = None,
     no_judge: bool = False,
     control: bool = True,
     trace: TraceSink | None = None,
@@ -1150,17 +1388,42 @@ async def run_sandbox(
             ),
         ],
     )
-    _section(
-        notes,
-        f"writing the mailbox: {count} model call(s) with "
-        f"{getattr(writer, 'label', writer.name)}, about half a minute each",
-    )
-    arrivals, failures, learning = await write_mailbox(
-        text_call(writer, stage="sandbox/writer", attempts=2),
-        count,
-        rng=rng,
-        notes=notes,
-    )
+    # A mailbox already on disk is walked again rather than written again: the mail was
+    # paid for once, and a second walk of the same mail is what makes two readings of one
+    # run comparable - the model is not asked to write different mail this time.
+    source_mailbox: Path | None = None
+    failures: tuple[str, ...] = ()
+    if from_mailbox is not None:
+        source_mailbox = Path(from_mailbox)
+        _section(
+            notes,
+            f"replaying the mailbox at {source_mailbox}: no mail is written and nothing is "
+            "paid for on the writing side",
+        )
+        arrivals = load_mailbox(source_mailbox)
+        learning = sum(1 for arrival in arrivals if arrival.teaches)
+        if not 0 < learning < len(arrivals):
+            # A mailbox saved before the split was recorded in it: the two halves were the
+            # two runs of the briefs, so half is the split that wrote the file.
+            learning = len(arrivals) // 2
+            _note(
+                notes,
+                "",
+                "the saved mailbox does not record which half taught, so it is split at "
+                f"{learning} of {len(arrivals)}",
+            )
+    else:
+        _section(
+            notes,
+            f"writing the mailbox: {count} model call(s) with "
+            f"{getattr(writer, 'label', writer.name)}, about half a minute each",
+        )
+        arrivals, failures, learning = await write_mailbox(
+            text_call(writer, stage="sandbox/writer", attempts=2),
+            count,
+            rng=rng,
+            notes=notes,
+        )
     if learning < 2 or len(arrivals) - learning < 2:
         raise SandboxError(
             f"the writer kept {learning} arrival(s) for the half that learns and "
@@ -1176,8 +1439,8 @@ async def run_sandbox(
     _note(
         notes,
         "",
-        f"mailbox written: {len(arrivals)} arrival(s) kept, {len(failures)} lost, at "
-        f"{mailbox_path}",
+        f"mailbox {'replayed' if source_mailbox else 'written'}: {len(arrivals)} arrival(s) "
+        f"{'read back' if source_mailbox else 'kept'}, {len(failures)} lost, at {mailbox_path}",
     )
     _note(
         notes,
@@ -1200,7 +1463,18 @@ async def run_sandbox(
     store = ClaimStore(grant=session_grant(purpose="sandbox run"), path=out_dir / "rules.jsonl")
     learner = Learner()
     router = Router(learner)
-    remembered = RememberedProvider(store, proposer)
+    # Both recordings sit beside the mailbox they belong to, so a re-run reads them from
+    # where the first run wrote them.
+    source_dir = (source_mailbox.parent if source_mailbox is not None else out_dir)
+    cache = ProposalCache.load(source_dir / "proposals.jsonl")
+    if cache.answers:
+        _note(
+            notes,
+            "",
+            f"the proposals kept at {source_dir / 'proposals.jsonl'} are replayed: "
+            f"{len(cache.answers)} answer(s)",
+        )
+    remembered = RememberedProvider(store, CachingProvider(proposer, cache))
     person = ModelUser(
         call=text_call(user, stage="sandbox/user"),
         name="aydin",
@@ -1208,6 +1482,7 @@ async def run_sandbox(
         classes={arrival.case_id: arrival.scenario.name for arrival in arrivals},
         card=OWNER_CARD,
     )
+    person.load_memo(source_dir / "owner.jsonl")
 
     _section(
         notes,
@@ -1314,12 +1589,38 @@ async def run_sandbox(
     # What this mailbox would have cost with nothing remembered. Without it the report can
     # only say how often the agent asked, never how much of that the learning took away.
     without_memory: tuple[LaneRecord, LaneRecord] | None = None
+    proposals_path = cache.save(out_dir / "proposals.jsonl")
+    _note(
+        notes,
+        "",
+        f"proposals kept: {len(cache.answers)} answer(s) at {proposals_path}, which is what "
+        "the control pass replays",
+    )
     if control:
         _section(notes, "the same mailbox with nothing remembered: the control")
         without_memory = await _control_pass(
-            cal_view, auto_view, seed=seed, provider=proposer, window=window, notes=notes
+            cal_view,
+            auto_view,
+            seed=seed,
+            provider=ReplayProvider(proposer, cache),
+            window=window,
+            notes=notes,
+        )
+        _note(
+            notes,
+            "",
+            f"the control replayed {cache.replayed} proposal(s) and asked for "
+            f"{cache.fresh} fresh one(s)",
         )
 
+    memo_path = person.save_memo(out_dir / "owner.jsonl")
+    if person.memo_hits:
+        _note(
+            notes,
+            "",
+            f"the owner answered {person.memo_hits} of {len(person.memo)} recorded "
+            "decision(s) from the recording, with no model call",
+        )
     judge = Judge(judge_model or DEFAULT_JUDGE)
     if no_judge:
         # Said out loud rather than left blank: a report that quietly omits the judge
@@ -1355,6 +1656,27 @@ async def run_sandbox(
         judged=tuple(judged),
         judge_error=judge.error,
         judge_cost=judge.cost,
+        judge_asked=judge.asked,
+        judge_retries=judge.retries,
+        judge_not_judged=judge.not_judged,
+        proposals_replayed=cache.replayed,
+        proposals_fresh=cache.fresh,
+        provenance=provenance(
+            source=str(source_mailbox or "fresh mailbox written for this run"),
+            models={
+                "writer": str(getattr(writer, "label", writer.name)),
+                "proposer": str(getattr(proposer, "label", proposer.name)),
+                "user": str(getattr(user, "label", user.name)),
+                "judge": judge.model,
+            },
+            seed=seed,
+            mailbox=str(mailbox_path),
+            mailbox_digest=_digest(mailbox_path),
+            proposals=str(proposals_path),
+            rules=str(out_dir / "rules.jsonl"),
+            owner_answers=str(memo_path),
+            cost=cost_dict(LEDGER),
+        ),
         unseen_asks=unseen_asks,
         control=without_memory,
         learner_path=learner_path,
@@ -1481,6 +1803,66 @@ def _judged(item: Judgement | None, case_id: str, what: str) -> str:
     return f"  {case_id}  {item.question}  {item.score:.2f}  {what}\n{reason}"
 
 
+def _scenario(name: str) -> Scenario:
+    """The brief a saved arrival says wrote it, or a named failure."""
+    for scenario in SCENARIOS:
+        if scenario.name == name:
+            return scenario
+    raise SandboxError(f"a saved arrival names the brief {name!r}, which this build has not")
+
+
+def arrival_from_record(record: Mapping[str, Any]) -> Arrival:
+    """Read one saved arrival back, so a mailbox that was already paid for can be re-walked."""
+    sandbox = record.get("sandbox") or {}
+    sender = record.get("sender") or {}
+    try:
+        return Arrival(
+            case_id=str(record["case_id"]),
+            scenario=_scenario(str(sandbox["scenario"])),
+            mail={
+                "sender_name": str(sender.get("display_name", "")),
+                "sender_email": str(sender.get("email", "")),
+                "verified_identity": bool(sender.get("verified_identity", True)),
+                "subject": str(record.get("subject", "")),
+                "body": str(record.get("body", "")),
+                "hypothesis_route": Route(str(sandbox["hypothesis_route"])),
+                "hypothesis_intent": str(sandbox.get("hypothesis_intent", "")),
+            },
+            sequence_index=int(record.get("sequence_index", 0)),
+            teaches=bool(sandbox.get("teaches", False)),
+        )
+    except (KeyError, ValueError) as error:
+        raise SandboxError(f"a saved arrival cannot be read back: {error}") from error
+
+
+def load_mailbox(path: Path | str) -> tuple[Arrival, ...]:
+    """Read a mailbox a previous run wrote, instead of paying a model to write another."""
+    source = Path(path)
+    try:
+        lines = source.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise SandboxError(f"cannot read the mailbox {source}: {error}") from error
+    arrivals: list[Arrival] = []
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            arrivals.append(arrival_from_record(json.loads(line)))
+        except json.JSONDecodeError as error:
+            raise SandboxError(f"{source}: line {number} is not JSON: {error}") from error
+    if not arrivals:
+        raise SandboxError(f"{source} holds no arrivals")
+    return tuple(arrivals)
+
+
+def _digest(path: Path) -> str:
+    """The hash of a file the run produced, so an artifact names what it was made from."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "unknown"
+
+
 def _write_mailbox_file(path: Path, arrivals: Sequence[Arrival]) -> Path:
     """Keep the mailbox itself, so a report can be read next to the mail that produced it."""
     return _write_text(
@@ -1565,6 +1947,8 @@ def render(outcome: SandboxOutcome) -> str:
             f"{_rate(writer_matched, writer_graded)}",
             "  the judge, on the semantic questions only:",
             *judged,
+            f"    asked {outcome.judge_asked} question(s), scored {len(outcome.judged)}, "
+            f"not judged {outcome.judge_not_judged} (after {outcome.judge_retries} retries)",
             *([f"    judge unavailable: {outcome.judge_error}"] if outcome.judge_error else []),
             "",
             "---- cost " + "-" * 68,
@@ -1614,10 +1998,14 @@ def as_dict(outcome: SandboxOutcome) -> dict[str, Any]:
             "user": outcome.user_model,
             "judge": outcome.judge_model,
         },
-        "comparability": "fresh mail every run: these numbers describe this mailbox, not a trend",
+        "comparability": (
+            "one mailbox, read once: these numbers describe this mailbox and are not a trend"
+        ),
+        "provenance": dict(outcome.provenance),
         "mailbox": {
-            "written": len(outcome.arrivals),
-            "failed": list(outcome.failures),                "calibration": outcome.calibration.total,
+            "arrivals": len(outcome.arrivals),
+            "failed": list(outcome.failures),
+            "calibration": outcome.calibration.total,
             "autonomous": outcome.autonomous.processed,
         },
         "states": {
@@ -1643,6 +2031,12 @@ def as_dict(outcome: SandboxOutcome) -> dict[str, Any]:
             "model": outcome.judge_model,
             "error": outcome.judge_error,
             "cost": outcome.judge_cost,
+            # Asked, scored and not scored, kept apart: a case the judge never answered is
+            # missing evidence, not a zero, and the two must not look alike.
+            "asked": outcome.judge_asked,
+            "retries": outcome.judge_retries,
+            "not_judged": outcome.judge_not_judged,
+            "scored": len(outcome.judged),
             "means": {
                 question: outcome.judged_mean(question)
                 for question in ("route defensible", "draft grounded")
@@ -1658,6 +2052,10 @@ def as_dict(outcome: SandboxOutcome) -> dict[str, Any]:
             ],
         },
         "rules": {"in_force": list(outcome.rules), "recalled": outcome.recall},
+        "control_replay": {
+            "proposals_replayed": outcome.proposals_replayed,
+            "proposals_fresh": outcome.proposals_fresh,
+        },
         "learning": {
             "asks_after_learning": len(outcome.asked_in("taught")),
             "asks_with_nothing_remembered": outcome.asks_with_nothing_remembered,
@@ -1891,6 +2289,10 @@ def _markdown(outcome: SandboxOutcome) -> str:
             f"| user | `{outcome.user_model}` |",
             f"| judge | `{outcome.judge_model}` |",
             f"| seed | {outcome.seed} |",
+            f"| git | `{outcome.provenance.get('git_sha', 'unknown')}` |",
+            f"| policy | floor `{outcome.provenance.get('floor_version', '?')}`, "
+            f"costs `{outcome.provenance.get('loss_version', '?')}` |",
+            f"| mailbox | `{str(outcome.provenance.get('mailbox_digest', '?'))[:16]}` |",
             "",
             "```",
             render(outcome),

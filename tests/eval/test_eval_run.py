@@ -93,7 +93,11 @@ def test_the_sealed_lane_is_scored_after_the_freeze_and_teaches_nothing(tmp_path
 
 def test_the_artifacts_are_the_report_the_run_returned(tmp_path: Path):
     outcome = evaluate(tmp_path)
-    assert json.loads(outcome.report_path.read_text(encoding="utf-8")) == outcome.report.as_dict()
+    written = json.loads(outcome.report_path.read_text(encoding="utf-8"))
+    assert {key: value for key, value in written.items() if key != "provenance"} == (
+        outcome.report.as_dict()
+    )
+    assert written["provenance"]["floor_version"], "a report has to name its policy versions"
     assert outcome.rules_path.exists(), "the run has to keep the rules it confirmed"
 
 
@@ -102,6 +106,19 @@ def test_the_same_seed_decides_the_same_way_twice(tmp_path: Path):
     second = evaluate(tmp_path / "second")
     assert first.report.as_dict() == second.report.as_dict()
     assert first.learner_path.read_bytes() == second.learner_path.read_bytes()
+
+
+def test_the_gates_are_in_the_report_as_data(tmp_path: Path):
+    """A build fails on the report, so the pass marks have to be machine-readable."""
+    outcome = evaluate(tmp_path)
+    written = json.loads(outcome.report_path.read_text(encoding="utf-8"))
+    assert written["gates_ok"] is True
+    assert {gate["name"] for gate in written["gates"]} == {
+        "learning writes in the sealed lane",
+        "floor violations",
+        "adversarial escalation",
+    }
+    assert all(isinstance(gate["ok"], bool) for gate in written["gates"])
 
 
 def test_a_transcript_with_no_replies_is_refused(tmp_path: Path):

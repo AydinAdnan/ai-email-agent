@@ -131,8 +131,13 @@ def test_mail_the_persona_refuses_is_settled_without_asking_the_provider() -> No
 
 
 def test_the_gateway_and_its_provider_share_one_meter() -> None:
-    """Two tables for one run is how a cost report starts under-reporting."""
+    """Two tables for one run is how a cost report starts under-reporting.
+
+    The meter is this test's own: reading the process-wide one made the count depend on
+    which tests ran before it, so the check passed or failed by running order.
+    """
     metered = provider(response(content=valid(), prompt=10, completion=10))
+    metered.ledger = Ledger()
     gateway = ProposalGateway(metered)
     asyncio.run(gateway.propose(message(), triage(message())))
     assert gateway.ledger is metered.ledger

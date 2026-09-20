@@ -72,10 +72,13 @@ def test_nothing_about_the_labels_reaches_the_classifier(guesses) -> None:
     only way to show that: the guess depends on the mail, and the same mail in another
     case would guess the same.
     """
-    by_subject: dict[str, set[str]] = {}
+    by_mail: dict[tuple[str, str, str], set[str]] = {}
     for case, guess in guesses:
-        by_subject.setdefault(case.event.message.subject, set()).add(guess.intent)
-    assert all(len(intents) == 1 for intents in by_subject.values())
+        message = case.event.message
+        by_mail.setdefault(
+            (message.sender.email, message.subject, message.body), set()
+        ).add(guess.intent)
+    assert all(len(intents) == 1 for intents in by_mail.values())
 
 
 def test_an_unverified_sender_never_reads_as_a_known_relationship() -> None:
@@ -136,6 +139,36 @@ def test_bulk_promo_mail_without_a_marker_is_still_bulk() -> None:
     )
     assert guess.intent == "newsletter"
     assert guess.relationship_class == "newsletter/marketing"
+
+
+def test_a_build_result_is_bulk_mail_not_a_question() -> None:
+    """A machine notice asks the reader nothing, so it is filed rather than answered.
+
+    Reading the fallback as an information request made a green build and a pull request
+    opening arrive as questions, which earns a drafted reply no reader can answer.
+    """
+    guess = triage(
+        message(
+            "builds@circleci.example",
+            subject="[Success] Build #1204 on feature/caching",
+            body="All 312 tests passed in 4m12s. Nothing to review.",
+        )
+    )
+    assert guess.intent == "newsletter"
+    assert guess.relationship_class == "newsletter/marketing"
+
+
+def test_a_machine_notice_that_reports_a_fault_stays_a_notification() -> None:
+    """The other half of the same rule: a fault is something the reader has to know."""
+    guess = triage(
+        message(
+            "alerts@sentry.example",
+            subject="[Fatal] Unhandled OutOfMemoryError in worker queue",
+            body="Events: 37 in the last hour. The worker restarted twice.",
+        )
+    )
+    assert guess.intent == "security alert"
+    assert guess.relationship_class == "self/system notification"
 
 
 def test_money_is_read_from_the_mail() -> None:

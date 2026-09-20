@@ -137,6 +137,12 @@ _GLOBAL_ANSWER = re.compile(
     re.IGNORECASE,
 )
 _LOCAL_ANSWER = re.compile(r"\b(just|only) (this|that|these|the sender)\b|\bthis (sender|one)\b", re.IGNORECASE)
+# The user naming the sender rather than the class of mail. Scope is matched closest
+# first, so this is the only path that pins a rule to one address on the mail's behalf.
+_SENDER_DEICTIC = re.compile(
+    r"\b(this|that|the) sender\b|\bfrom (this|that|them|him|her|these people)\b",
+    re.IGNORECASE,
+)
 
 _WORD = re.compile(r"[a-z][a-z0-9/-]{2,}")
 _STOP = frozenset(
@@ -381,6 +387,9 @@ def _scope_for(
         # has to be confirmed before any of them is a rule.
         return ClaimScope(intent=named[0]), ScopeAnchor.INTENT, 0.6
 
+    if context is not None and _SENDER_DEICTIC.search(quote):
+        return ClaimScope(sender=context.sender), ScopeAnchor.CONTEXT, 0.9
+
     if context is not None:
         topic = _topic_overlap(quote, context.subject)
         if topic:
@@ -397,7 +406,17 @@ def _scope_for(
 
 
 def _from_context(context: FeedbackContext) -> ClaimScope:
-    return ClaimScope(sender=context.sender, intent=context.intent)
+    """The narrow reading tied to the mail in front of the user.
+
+    The class of mail, not the address that sent it: a person correcting one mail means
+    "mail like this", and a rule that carries the address covers that one address and
+    nothing else, which is how one correction about a recruiter failed to cover the next
+    recruiter. The address is kept only when the mail's class is unknown, where there is
+    nothing wider to name.
+    """
+    if context.intent:
+        return ClaimScope(intent=context.intent)
+    return ClaimScope(sender=context.sender)
 
 
 def _topic_overlap(quote: str, subject: str) -> set[str]:

@@ -60,8 +60,10 @@ def test_a_cron_suppression_is_scoped_to_the_mail_it_was_typed_about() -> None:
     claim = reading.claim
     assert claim is not None
     assert claim.type is ClaimType.BOUNDARY
-    assert claim.scope.sender == "status@acme.example"
-    assert claim.scope.intent == "information request"
+    # The class of the mail, not the address that sent it: a rule pinned to one address
+    # covers that address and nothing else, which is how one correction about a class of
+    # mail failed to cover the next one.
+    assert claim.scope == ClaimScope(intent="information request")
     assert claim.scope_anchor is ScopeAnchor.CONTEXT
     assert claim.route is Route.PROCEED_SILENTLY
     assert claim.action_id == "email.archive"
@@ -69,7 +71,7 @@ def test_a_cron_suppression_is_scoped_to_the_mail_it_was_typed_about() -> None:
     assert reading.kind.value == "never_do_this"
     # The echo states the action, the scope and the start point, in plain words, and it
     # is the sentence the plan's worked example prints.
-    assert "silently archive future mail from status@acme.example" in reading.echo
+    assert "silently archive future information request mail" in reading.echo
     assert "This starts after WAJO-0052, with the next arrival" in reading.echo
     # Nothing is in memory until the user confirms, and then exactly one claim is.
     memory = store()
@@ -83,6 +85,18 @@ def test_a_cron_suppression_is_scoped_to_the_mail_it_was_typed_about() -> None:
     assert confirmed.quote == "ignore future cron status emails"
     assert confirmed.source_message_id == "msg-in-wajo-0052"
     assert confirmed.recorded_at == NOW
+
+
+def test_naming_the_sender_keeps_the_rule_pinned_to_that_sender() -> None:
+    """The address is reached for when the user named it, and not otherwise."""
+    named = read("always ask me first about this sender", CRON)
+    assert named.claim is not None
+    assert named.claim.scope == ClaimScope(sender="status@acme.example")
+
+    by_class = read("stop notifying me about cron status mail", CRON)
+    assert by_class.claim is not None
+    assert by_class.claim.scope.sender is None
+    assert by_class.claim.scope.intent == "information request"
 
 
 def test_an_explicit_address_is_the_scope_it_names() -> None:
@@ -143,7 +157,7 @@ def test_a_line_that_names_no_scope_is_offered_narrow_and_asked_about() -> None:
     reading = read("stop notifying me", CRON)
     claim = reading.claim
     assert claim is not None
-    assert claim.scope == ClaimScope(sender="status@acme.example", intent="information request")
+    assert claim.scope == ClaimScope(intent="information request")
     assert claim.scope_anchor is ScopeAnchor.CONTEXT
     assert claim.confidence < 0.8
     assert "every future arrival" in (reading.prompt or "")

@@ -251,6 +251,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     sandbox_run.add_argument(
+        "--from-mailbox",
+        metavar="PATH",
+        help=(
+            "walk a mailbox an earlier run already wrote instead of paying a model to write "
+            "another one; the proposals and the owner's answers recorded beside it are "
+            "replayed too, so the second reading of a run costs nothing on those sides"
+        ),
+    )
+    sandbox_run.add_argument(
         "--out", default="artifacts/sandbox", help="where the run, charts and report go"
     )
     sandbox_run.add_argument(
@@ -291,6 +300,7 @@ def sandbox_run_command(args: argparse.Namespace, out: IO[str]) -> int:
                 out=args.out,
                 judge_sample=args.judge_sample,
                 proposal_timeout=args.proposal_timeout,
+                from_mailbox=args.from_mailbox,
                 no_judge=args.no_judge,
                 control=not args.no_control,
                 trace=sink,
@@ -409,6 +419,17 @@ def _replay_flags(target: argparse.ArgumentParser) -> None:
             "at the end, so the next run answers from them instead of asking again"
         ),
     )
+    target.add_argument(
+        "--rule-ttl-days",
+        type=float,
+        default=0.0,
+        metavar="DAYS",
+        help=(
+            "retire rules nobody has restated in DAYS days, and say how many went; "
+            "0 (the default) keeps every rule in force, because retiring the user's own "
+            "words is a decision a run has to ask for"
+        ),
+    )
 
 
 def _view_note(show_labels: bool) -> str:
@@ -425,7 +446,11 @@ def _open_store(args: argparse.Namespace) -> ClaimStore:
         if getattr(args, "no_learn", False)
         else session_grant(purpose="calibration session")
     )
-    return ClaimStore(grant=grant, path=args.store)
+    ttl = float(getattr(args, "rule_ttl_days", 0.0) or 0.0)
+    store = ClaimStore(grant=grant, path=args.store, ttl_days=ttl)
+    if ttl:
+        store.retire(store.expired(), reason="expired")
+    return store
 
 
 def _proposing(provider: ProposalProvider, store: ClaimStore) -> ProposalGateway:
@@ -492,6 +517,11 @@ def _store_note(args: argparse.Namespace, store: ClaimStore, out: IO[str]) -> No
         out.write(f"rules in {args.store}: not read ({store.refusal})\n")
         return
     out.write(f"rules in {args.store}: {store.loaded} loaded\n")
+    if store.retired:
+        out.write(
+            f"    {store.retired} retired: nobody has restated them in "
+            f"{args.rule_ttl_days:g} day(s)\n"
+        )
 
 
 def _keep_rules(args: argparse.Namespace, store: ClaimStore, out: IO[str]) -> None:

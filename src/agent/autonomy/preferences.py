@@ -13,7 +13,7 @@ from agent.gateway import (
     parse_proposal,
 )
 from agent.memory.claims import Claim, ClaimStore
-from agent.safety.floor import Route
+from agent.safety.floor import ALL_ROUTES, Route
 from agent.tools.email_tools import tool_for_action
 from agent.triage import Triage
 
@@ -77,14 +77,24 @@ class RememberedProvider:
         )
 
     def claim_for(self, message: Message, hints: Triage) -> Claim | None:
-        """The confirmed claim that bears on this mail and names a route, if one does."""
+        """The confirmed claim that bears on this mail and names a route, if one does.
+
+        The newest one, because that is how a person changes their mind: "actually stop
+        telling me about these" said after "always notify me" means the second thing. Two
+        rules that share a moment are settled the cautious way, which is the same rule the
+        rest of the pipeline uses when two sources disagree.
+        """
         sender = message.sender.email
-        for claim in self.store.matching(
-            sender=sender, domain=_domain(sender), intent=hints.intent
-        ):
-            if claim.route is not None:
-                return claim
-        return None
+        bearing = [
+            claim
+            for claim in self.store.matching(
+                sender=sender, domain=_domain(sender), intent=hints.intent
+            )
+            if claim.route is not None
+        ]
+        if not bearing:
+            return None
+        return max(bearing, key=lambda claim: (claim.recorded_at, ALL_ROUTES.index(claim.route)))
 
     def proposal_for(self, message: Message, hints: Triage) -> Proposal | None:
         """What the user's own words amount to for this mail, if anything."""

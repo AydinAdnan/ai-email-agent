@@ -21,7 +21,7 @@ import io
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,7 @@ from agent.sim.policy import ProposalPolicy
 from agent.sim.runner import close_input, run_simulation
 from agent.sim.schedule import WINDOW_SIZE
 from agent.trace import TraceSink
+from agent.usage import LEDGER
 from evals.harness import (
     BLOCK,
     CalibrationReport,
@@ -46,7 +47,9 @@ from evals.harness import (
     HeldOutReport,
     ScoringError,
     calibration_report,
+    cost_dict,
     held_out_report,
+    provenance,
     record_from_chat,
     record_from_graph,
     two_lane_report,
@@ -119,6 +122,7 @@ class EvalOutcome:
     learner_path: Path
     rules_path: Path
     report_path: Path
+    provenance: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def calibration(self) -> CalibrationReport:
@@ -133,8 +137,17 @@ def render(outcome: EvalOutcome) -> str:
     """What the run did, in the order a reader wants it: provenance, then the numbers."""
     gates = "\n".join(f"  {gate.describe()}" for gate in outcome.held_out.gates())
     rules = "\n".join(f"    {rule}" for rule in outcome.rules) or "    (none)"
+    made_by = outcome.provenance
+    where = (
+        f"made by: git {made_by.get('git_sha', 'unknown')}, "
+        f"floor {made_by.get('floor_version', '?')}, "
+        f"costs {made_by.get('loss_version', '?')}, "
+        f"proposal source {made_by.get('proposal_source', '?')}, "
+        f"dataset {str(made_by.get('dataset_digest', '?'))[:16]}"
+    )
     return "\n".join(
         [
+            where,
             f"transcript: {outcome.script.name}  "
             f"({outcome.script.lines} line(s) over {len(outcome.script.cases)} decision(s))",
             f"lanes: calibration {outcome.lanes['calibration']} case(s), "
@@ -225,7 +238,18 @@ async def evaluate(
             learning_writes=learner.applied - writes_before,
         ),
     )
-    report_path = report.write(out_dir / "report.json")
+    made_by = provenance(
+        dataset=str(calibration.manifest.source),
+        dataset_digest=calibration.manifest.dataset_digest,
+        script=script.name,
+        seed=seed,
+        block=block,
+        lanes={"calibration": len(calibration.cases), "sealed": len(sealed.cases)},
+        proposal_source=str(getattr(inner, "label", None) or inner.name),
+        recalled=remembered.recalled,
+        cost=cost_dict(LEDGER),
+    )
+    report_path = report.write(out_dir / "report.json", provenance=made_by)
     return EvalOutcome(
         report=report,
         script=script,
@@ -237,6 +261,7 @@ async def evaluate(
         learner_path=learner_path,
         rules_path=out_dir / "rules.jsonl",
         report_path=report_path,
+        provenance=made_by,
     )
 
 

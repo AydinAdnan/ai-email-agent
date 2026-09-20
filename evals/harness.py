@@ -17,9 +17,11 @@ import argparse
 import asyncio
 import io
 import json
+import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +30,7 @@ from agent.dataset import DEFAULT_DATASET_PATH, Lane, LaneView, Manifest, SplitV
 from agent.events import FeedbackEvent
 from agent.gateway import ProposalGateway, RuleProvider
 from agent.graph import GraphOutcome, GraphRuntime, GraphSession
-from agent.safety.floor import Route
+from agent.safety.floor import FLOOR_VERSION, Route
 from agent.sim.policy import Decision, ProposalPolicy
 from agent.sim.runner import ChatRunner, SimOutcome, close_input
 from agent.tools.registry import AUTONOMOUS_ROUTES, Receipt
@@ -36,6 +38,74 @@ from agent.tools.registry import AUTONOMOUS_ROUTES, Receipt
 # Cases per block in the interruption curve. The plan's eleven-case fixture shows a curve
 # in one window; a real lane needs blocks wide enough that a block is not one mail.
 BLOCK = 12
+
+# The version of the cost table, by the name it is defined under. A number cannot be
+# compared against another run's unless the table that produced it is named.
+LOSS_VERSION = "LOSS_V1"
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def git_sha() -> str:
+    """The commit the run came from, so an artifact can be traced to the code that made it."""
+    try:
+        found = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],  # noqa: S607 - git is on PATH
+
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return found.stdout.strip() or "unknown"
+
+
+def cost_dict(ledger: Any) -> dict[str, Any]:
+    """The cost table as data, under the deflection rate that justifies the cheap layer.
+
+    A model with no published rate is reported with a null cost rather than a zero, because
+    an invented number is worse than a missing one, and the whole table is reported rather
+    than only its total so a reader can see which stage spent it.
+    """
+    return {
+        "calls": ledger.calls,
+        "tokens": ledger.tokens,
+        "estimated_cost_usd": round(ledger.cost, 6),
+        "arrivals": ledger.arrivals,
+        "deflected": ledger.deflected,
+        "deflection_rate": round(ledger.deflection_rate, 4),
+        "unpriced": [{"stage": row.stage, "model": row.model} for row in ledger.unpriced],
+        "rows": [
+            {
+                "stage": row.stage,
+                "provider": row.provider,
+                "model": row.model,
+                "calls": row.calls,
+                "prompt_tokens": row.prompt_tokens,
+                "completion_tokens": row.completion_tokens,
+                "estimated_cost_usd": None if row.cost is None else round(row.cost, 6),
+            }
+            for row in ledger.rows()
+        ],
+    }
+
+
+def provenance(**fields: Any) -> dict[str, Any]:
+    """What produced a report: the code, the versions and the models, not only the numbers.
+
+    A report that does not name its models and its policy versions cannot be compared with
+    another one, and a number nobody can trace back is a number nobody can audit.
+    """
+    return {
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "git_sha": git_sha(),
+        "floor_version": FLOOR_VERSION,
+        "loss_version": LOSS_VERSION,
+        **fields,
+    }
 
 # The report's three dispositions. Silent and notify are both the agent acting on its own;
 # asking is work the user did; escalating is a call only the user could make.
@@ -353,6 +423,12 @@ class HeldOutReport:
     def gates_ok(self) -> bool:
         return all(gate.ok for gate in self.gates())
 
+    def gates_dict(self) -> list[dict[str, Any]]:
+        """The hard gates as data, so a build can fail on them without reading prose."""
+        return [
+            {"name": gate.name, "ok": gate.ok, "detail": gate.detail} for gate in self.gates()
+        ]
+
     def render(self) -> str:
         return "\n".join(
             [
@@ -568,13 +644,20 @@ class EvalReport:
             },
             "calibration": self.calibration.as_dict(),
             "held_out": self.held_out.as_dict(),
+            # The three reports the plan's exit gate asks for, in one artifact: safety and
+            # calibration above, the pass marks and the cost alongside.
+            "gates": self.held_out.gates_dict(),
+            "gates_ok": self.held_out.gates_ok,
         }
 
-    def write(self, path: Path | str) -> Path:
+    def write(
+        self, path: Path | str, *, provenance: Mapping[str, Any] | None = None
+    ) -> Path:
         """Write the report as JSON, naming the file in the error rather than failing mute."""
         target = Path(path)
+        payload = {**self.as_dict(), "provenance": dict(provenance or {})}
         try:
-            target.write_text(json.dumps(self.as_dict(), indent=2) + "\n", encoding="utf-8")
+            target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         except OSError as error:
             raise ScoringError(f"cannot write the report to {target}: {error}") from error
         return target
@@ -653,6 +736,7 @@ def two_lane_report(
 __all__ = [
     "BLOCK",
     "DISPOSITION_OF",
+    "LOSS_VERSION",
     "Block",
     "CalibrationReport",
     "Disposition",
@@ -664,9 +748,12 @@ __all__ = [
     "ScoringError",
     "ask_curve",
     "calibration_report",
+    "cost_dict",
     "dispositions",
+    "git_sha",
     "held_out_report",
     "main",
+    "provenance",
     "record_from_chat",
     "record_from_graph",
     "run_two_lanes",

@@ -25,6 +25,7 @@ from math import ceil
 from typing import Any
 
 from agent.dataset import Case
+from agent.safety.injection import scan
 from agent.triage import MONEY
 
 # A few examples and not many tokens of them: style is guidance for one short reply, and a
@@ -64,6 +65,9 @@ _SALUTATIONS = frozenset({"hi", "hey", "hello", "dear"})
 
 # What a gap looks like in the body, so it cannot be approved blind.
 UNANSWERED = "[needs your answer: {label}]"
+# What is written instead of a question that is really an instruction. The text stays in
+# the original mail; a draft does not repeat it in the user's voice.
+UNREPEATED = "[needs your answer: {label}] - read the request in the original mail"
 
 
 @dataclass(frozen=True)
@@ -288,6 +292,28 @@ def open_questions(body: str, *, limit: int = QUESTION_LIMIT) -> tuple[str, ...]
     return tuple(question for question in asked[:limit] if question)
 
 
+def carried_instruction(text: str, case: Case) -> str:
+    """An imperative-override phrase this text repeats from the mail, or the empty string.
+
+    The scanner is the project's one scanner, but only its override shapes count here: a
+    colleague writing "please send me the deck" is asking a person for something, and a
+    draft quoting it is doing its job. "Ignore all previous instructions" is not a
+    question to answer, and it must not reach a body a human may approve as the reply.
+    """
+    message = case.event.message
+    found = scan(
+        text,
+        sender=message.sender.email,
+        display_name=message.sender.display_name,
+        # Judged as text a person might approve rather than as mail: the question is
+        # whether the draft carries the instruction, not whether the sender was trusted.
+        sender_verified=False,
+    )
+    return next(
+        (signal for signal in found.signals if signal.startswith("Imperative control")), ""
+    )
+
+
 def _short(text: str, width: int = 96) -> str:
     """One line of a question, for a gap list nobody should have to scroll."""
     collapsed = " ".join(text.split())
@@ -330,6 +356,16 @@ def draft_reply(case: Case, style: Style) -> Predraft:
     unresolved: list[str] = []
     for index, question in enumerate(questions, start=1):
         label = f"question {index}"
+        if carried_instruction(question, case):
+            # The mail's "question" is an instruction aimed at the assistant. Repeating it
+            # would put that instruction in the draft's own voice, in a body the user may
+            # approve without reading the original, so the gap is named and nothing else.
+            lines += ["", UNREPEATED.format(label=label)]
+            unresolved.append(
+                f"{label}: the mail asks for an action rather than an answer, so the "
+                "draft does not repeat it"
+            )
+            continue
         lines += ["", f"You asked: {question}", UNANSWERED.format(label=label)]
         facts.append(FactSource(label, "mail", question))
         unresolved.append(f"{label}: {_short(question)}")
@@ -350,6 +386,7 @@ class DraftCode(StrEnum):
 
     WRONG_RECIPIENT = "WRONG_RECIPIENT"
     MASK_LEFTOVER = "MASK_LEFTOVER"
+    LIFTED_INSTRUCTION = "LIFTED_INSTRUCTION"
     UNSOURCED_DATE = "UNSOURCED_DATE"
     UNSOURCED_AMOUNT = "UNSOURCED_AMOUNT"
 
@@ -398,6 +435,16 @@ def validate_draft(draft: Predraft, case: Case) -> Validation:
             ok=False,
             code=DraftCode.MASK_LEFTOVER,
             detail=f"{token.group(0)} survived into the draft",
+        )
+
+    # The subject is inherited from the mail, so it is the one field outside a quotation
+    # where the mail's own words reach a body a human may approve.
+    carried = carried_instruction(draft.subject, case)
+    if carried:
+        return Validation(
+            ok=False,
+            code=DraftCode.LIFTED_INSTRUCTION,
+            detail=f"the subject repeats an instruction from the mail ({carried})",
         )
 
     source = _flatten(source_text(case))

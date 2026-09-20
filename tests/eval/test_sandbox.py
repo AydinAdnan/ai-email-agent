@@ -229,6 +229,40 @@ def _run_with(tmp_path: Path, *, count: int, model: FakeModel, notes=None, contr
     )
 
 
+def test_a_saved_mailbox_is_walked_again_without_paying_for_it_twice(tmp_path: Path):
+    """The mail is written once. A second reading replays it, its proposals and the owner.
+
+    This is what makes two readings of one mailbox comparable, and what stops a re-run
+    from buying the same mail a second time.
+    """
+    first = _run_with(tmp_path, count=6, model=FakeModel())
+    mailbox = tmp_path / "mailbox.jsonl"
+    assert mailbox.exists(), "a run has to keep the mailbox it wrote"
+    assert (tmp_path / "proposals.jsonl").exists(), "and the answers it paid for"
+    assert (tmp_path / "owner.jsonl").exists(), "and what the owner said"
+
+    again = FakeModel()
+    second = asyncio.run(
+        run_sandbox(
+            count=6,
+            seed=7,
+            out=tmp_path / "again",
+            no_judge=True,
+            control=True,
+            proposer=again,
+            writer=again,
+            user=again,
+            from_mailbox=mailbox,
+        )
+    )
+    assert again.written == 0, "a replayed mailbox writes no mail"
+    assert again.answered == 0, "the owner's answers were recorded, so none are re-asked"
+    assert second.proposals_replayed > 0, "the pipeline's answers are replayed, not re-bought"
+    assert second.autonomous.routes == first.autonomous.routes, (
+        "the same mail with the same answers has to walk to the same routes"
+    )
+
+
 def test_every_arrival_is_written_and_decided(tmp_path: Path):
     """Each half decides exactly the arrivals it was given, and nothing goes missing."""
     outcome = run(tmp_path, count=6)
