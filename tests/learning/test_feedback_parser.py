@@ -28,6 +28,26 @@ CRON = FeedbackContext(
     subject="Nightly cron status: 3 jobs failed",
     message_id="msg-in-wajo-0052",
 )
+CI_FAILURE = FeedbackContext(
+    case_id="SAND-009",
+    sender="notifications@forgeci.example",
+    intent="security alert",
+    relationship_class="self/system notification",
+    route=Route.ESCALATE,
+    action_id="",
+    subject="[ForgeCI] Secret scanning failed on PR #1842 in techcorp/platform-infra",
+    message_id="msg-sand-009",
+)
+LARGE_RECEIPT = FeedbackContext(
+    case_id="SAND-004",
+    sender="billing@vantageperipherals.example",
+    intent="receipt",
+    relationship_class="vendor",
+    route=Route.ESCALATE,
+    action_id="",
+    subject="Receipt for your order VP-48291",
+    message_id="msg-sand-004",
+)
 PROMO = FeedbackContext(
     case_id="WAJO-0009",
     sender="promos@shopzilla.example",
@@ -149,6 +169,50 @@ def test_the_whole_inbox_is_never_the_default_reading() -> None:
     assert widened.scope_anchor is ScopeAnchor.GLOBAL
     assert widened.scope == ClaimScope()
     assert "every future arrival" in widened.describe()
+
+
+def test_asking_first_is_an_ask_and_not_an_escalation() -> None:
+    """"always ask me first" read as ESCALATE, so the rule the owner confirmed said
+    escalate about a sender they wanted a predraft for, and every later mail from that
+    sender arrived with nothing prepared instead of a draft to approve.
+    """
+    reading = read("always ask me first about this sender", CRON)
+    claim = reading.claim
+    assert claim is not None
+    assert claim.route is Route.ASK_FIRST_WITH_PREDRAFT
+    assert claim.scope == ClaimScope(sender="status@acme.example")
+    assert "draft a reply to and ask you about future mail from status@acme.example" in reading.echo
+
+
+def test_a_class_the_vocabulary_does_not_hold_is_not_widened_to_the_mails_class() -> None:
+    """A line about build notices may not become a rule about security alerts.
+
+    The mail in front of the user is a CI failure, which the classifier reads as a security
+    alert. "ignore build notifications" is narrower than that class, so taking the class as
+    the scope would store a rule nobody said and silence the alerts the user wants.
+    """
+    reading = read("ignore build notifications and stop telling me about them", CI_FAILURE)
+    claim = reading.claim
+    assert claim is not None
+    assert claim.scope == ClaimScope(sender="notifications@forgeci.example")
+    assert claim.scope.intent is None
+    assert claim.route is Route.PROCEED_SILENTLY
+    # The width was inferred rather than said, so the echo asks about it before it is a rule.
+    assert claim.confidence < 0.8
+    assert "every future arrival" in (reading.prompt or "")
+
+
+def test_a_qualifier_the_schema_cannot_hold_keeps_the_narrow_reading() -> None:
+    """"receipts over five hundred dollars" has a threshold no scope can carry.
+
+    Widening it to the class turned it into "tell me about every receipt", which then fought
+    a silence rule about the same class and won or lost on timestamps. The sender is the
+    narrow reading honest about what was said.
+    """
+    reading = read("always tell me about receipts over five hundred dollars", LARGE_RECEIPT)
+    assert reading.claim is not None
+    assert reading.claim.scope == ClaimScope(sender="billing@vantageperipherals.example")
+    assert reading.claim.scope.intent is None
 
 
 def test_a_line_that_names_no_scope_is_offered_narrow_and_asked_about() -> None:

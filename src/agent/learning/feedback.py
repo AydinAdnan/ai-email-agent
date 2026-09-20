@@ -110,7 +110,7 @@ _ASK = re.compile(
     re.IGNORECASE,
 )
 _ESCALATE = re.compile(
-    r"\b(escalate|leave (it|them) (to|for) me|hand (it|them) (to|over to) me|always ask)\b",
+    r"\b(escalate|leave (it|them) (to|for) me|hand (it|them) (to|over to) me)\b",
     re.IGNORECASE,
 )
 # "ignore these" is both: the user does not want to see them and does not want them in
@@ -143,6 +143,21 @@ _SENDER_DEICTIC = re.compile(
     r"\b(this|that|the) sender\b|\bfrom (this|that|them|him|her|these people)\b",
     re.IGNORECASE,
 )
+
+# Words that say what to do rather than which mail to do it to. A line made only of these
+# names no class, which is the case the narrow reading is offered for.
+_ACTION_WORDS = frozenset(
+    {
+        "alert", "archive", "asking", "delete", "draft", "escalate", "file", "forward",
+        "ignore", "label", "mute", "notified", "notification", "notifications", "notify",
+        "notifying", "ping", "quiet", "reply", "send", "silence", "silently", "telling",
+        "trash", "unsubscribe",
+    }
+)
+# Words that point at a scope rather than name one: "everything", "this sender", "them".
+_SCOPE_WORDS = frozenset({"arrival", "arrivals", "everything", "anything", "inbox", "ones"}) | {
+    "this", "that", "these", "those", "them", "theirs", "sender",
+}
 
 _WORD = re.compile(r"[a-z][a-z0-9/-]{2,}")
 _STOP = frozenset(
@@ -394,6 +409,13 @@ def _scope_for(
         topic = _topic_overlap(quote, context.subject)
         if topic:
             return _from_context(context), ScopeAnchor.CONTEXT, 0.8
+        if _unexplained_words(quote, context):
+            # The line names something this vocabulary does not hold and the mail is not
+            # about: "ignore build notifications" said about a security alert, or "receipts
+            # over five hundred dollars" said about a receipt. Those words are narrower than
+            # the mail's class, so reading them as the class silently widens the rule into
+            # something nobody said. The narrow reading of "mail like this" is the sender.
+            return ClaimScope(sender=context.sender), ScopeAnchor.CONTEXT, 0.6
         if _DEICTIC.search(quote):
             return _from_context(context), ScopeAnchor.CONTEXT, 0.9
 
@@ -417,6 +439,20 @@ def _from_context(context: FeedbackContext) -> ClaimScope:
     if context.intent:
         return ClaimScope(intent=context.intent)
     return ClaimScope(sender=context.sender)
+
+
+def _unexplained_words(quote: str, context: FeedbackContext) -> set[str]:
+    """Words the user used that name nothing this mailbox can act on.
+
+    A rule's scope comes from the user's own words, so a line whose words name no class the
+    classifier holds and share nothing with the mail's subject has not been understood well
+    enough to be widened to the mail's class. Words that only say what to do, and words that
+    point at a scope instead of naming one, are not evidence of that.
+    """
+    spoken = set(_words(quote)) - _ACTION_WORDS - _SCOPE_WORDS
+    if not spoken:
+        return set()
+    return spoken - set(_words(context.subject))
 
 
 def _topic_overlap(quote: str, subject: str) -> set[str]:

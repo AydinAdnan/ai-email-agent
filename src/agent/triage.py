@@ -76,7 +76,8 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
         r"amazon web services (invoice|bill)|\baws\b.{0,60}(invoice|bill|balance|usage)"
         r"|\b(azure|microsoft azure|google cloud|\bgcp\b|datadog|cloudwatch|cloud service)\b"
         r".{0,60}\b(invoice|bill|billing statement|statement|charges|balance|amount due|"
-        r"past due)\b|\bcloud (bill|usage)\b|infrastructure (invoice|bill)",
+        r"past due)\b|\bcloud (bill|invoice|statement|charges|usage)\b"
+        r"|infrastructure (invoice|bill)",
     ),
     (
         # After the cloud bills, because an invoice from a verified billing sender is a
@@ -84,7 +85,8 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
         # ask for a token or a key is a security matter, not a payment one.
         "financial request",
         r"\bwire\b|wire transfer|bank transfer|routing number|account number|\biban\b|\bswift\b"
-        r"|gift card|\bremit\b|transfer funds|duplicate charge|re-?commit"
+        r"|gift card|\bremit\b|\bremittances?\b|\bsort code\b|\bbeneficiary\b|\bbank details\b"
+        r"|transfer funds|duplicate charge|re-?commit"
         # Asking *the reader* to change where money goes. A vendor's "update payment
         # details" in a renewal notice is customer support, and it is possessive-marked
         # so the two do not look alike.
@@ -99,6 +101,10 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
         r"forward .{0,40}(deck|spreadsheet|file|document|statement|roadmap)"
         r"|send (me|us) (the )?(file|document|statement|spreadsheet|deck)"
         r"|\bshare\b.{0,30}(document|file|deck)|salary spreadsheet|confidential (roadmap|deck)"
+        # A request to be *sent* a document counts whatever the document is called: 'please
+        # send me the disaster recovery runbook' asks for a file. The verb is what carries
+        # the request, so a bare 'Runbook: https://...' in an alert is not one.
+        r"|(send|share|forward)\b.{0,60}\b(runbook|playbook|diagram|schematic|notes|deck)\b"
         r"|\b(attached|attachment|attach)\b.{0,30}\b(file|document|resume|cv)\b"
         r"|my resume|resume submission",
     ),
@@ -112,7 +118,11 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "unsubscribe/archive",
-        r"unsubscribe from all|\barchive\b|storage (critical|full)|clean ?up|\bquota\b",
+        # The mailbox itself is what is being talked about, never the word alone: a colleague
+        # asking about "the cleanup" or naming a folder "archive" is asking a question, and a
+        # report that says "archive" is not an instruction to tidy anything up.
+        r"unsubscribe from all|storage (critical|full)|mail ?box .{0,20}\b(over|full|quota|capacity)"
+        r"|free up space|\bquota\b",
     ),
     (
         "receipt",
@@ -139,7 +149,11 @@ _INTENT_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "customer support",
-        r"\bsupport (team|ticket|request|plan|desk)\b|\bticket\b|case #|your (recent )?order"
+        # A ticket is a support ticket when it has a number on it. The bare word is a noun
+        # a colleague's question uses too - "there's no linked ticket" - and that question
+        # is not customer support.
+        r"\bsupport (team|ticket|request|plan|desk)\b|ticket\s*(#|number|id|ref)\b|case #"
+        r"|your (recent )?order"
         r"|refund|renewal|\bsubscription\b|\blicense\b|expire|\bdeliverables?\b",
     ),
     (
@@ -189,7 +203,9 @@ _FAULT_WORDS = re.compile(
     r"\bfatal\b|\bcritical\b|\bexception\b|\boutofmemory\b|\bcrash(ed|es|ing)?\b"
     r"|\bincident\b|\boutage\b|\bdegraded\b|\bbreach\b|\bvulnerab\w*\b|\badvisor(?:y|ies)\b"
     r"|\bsuspend(?:ed|ing)?\b|\brevok\w*\b|\balarms?\b|\balerts?\b|\bfail(?:ed|ure|ing|s)?\b"
-    r"|\bspike\b|\bexpir\w*\b|\baction required\b|\bunusual\b|\bwarning\b|\boverdue\b",
+    # "no action required" is the phrase a green build ends with, so the one fault phrase that
+    # negates itself is read only where it is not negated: a build notice is not an alert.
+    r"|\bspike\b|\bexpir\w*\b|(?<!\bno )\baction required\b|\bunusual\b|\bwarning\b|\boverdue\b",
     re.IGNORECASE,
 )
 

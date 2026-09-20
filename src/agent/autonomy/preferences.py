@@ -79,10 +79,11 @@ class RememberedProvider:
     def claim_for(self, message: Message, hints: Triage) -> Claim | None:
         """The confirmed claim that bears on this mail and names a route, if one does.
 
-        The newest one, because that is how a person changes their mind: "actually stop
-        telling me about these" said after "always notify me" means the second thing. Two
-        rules that share a moment are settled the cautious way, which is the same rule the
-        rest of the pipeline uses when two sources disagree.
+        The narrowest one wins, and the newest one at that width: a rule about one sender
+        is what the user said about that sender, so a later rule about a whole class does
+        not quietly overwrite it. Among rules of the same width the newest wins, because
+        that is how a person changes their mind, and two that share a moment are settled
+        the cautious way, which is what the rest of the pipeline does when sources disagree.
         """
         sender = message.sender.email
         bearing = [
@@ -94,7 +95,11 @@ class RememberedProvider:
         ]
         if not bearing:
             return None
-        return max(bearing, key=lambda claim: (claim.recorded_at, ALL_ROUTES.index(claim.route)))
+        width = len(bearing[0].scope.as_key())
+        same_width = [claim for claim in bearing if len(claim.scope.as_key()) == width]
+        return max(
+            same_width, key=lambda claim: (claim.recorded_at, ALL_ROUTES.index(claim.route))
+        )
 
     def proposal_for(self, message: Message, hints: Triage) -> Proposal | None:
         """What the user's own words amount to for this mail, if anything."""

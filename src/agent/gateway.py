@@ -526,9 +526,48 @@ def _persona_checked(proposal: Proposal, message: Message, hints: Triage) -> Pro
 LABEL_ACTION = "email.apply_label"
 
 
+def _route_work(proposal: Proposal, hints: Triage) -> Proposal:
+    """Give a route that promises work the work it promised.
+
+    The schema lets a proposer answer the routing question without naming an action, and a
+    proposal that names no action reaches the floor as a tool nobody holds, which escalates
+    the very mail the route meant to handle: every no-action notice a small model reads as
+    'file it and move on' arrived as a hand-over. So the pipeline's own filing is derived
+    here, the same way a label already is - the folder the triage reads, or the archive
+    when no folder fits - and an ask without an action becomes the predraft the route is
+    named after. An escalation still carries no action, and a proposal that named a real
+    action is not touched.
+    """
+    if proposal.route is Route.ESCALATE:
+        return proposal
+    if proposal.action_id is not None and proposal.tool_name != NO_ACTION_TOOL:
+        return proposal
+    chosen = ACTION_BY_INTENT.get(hints.intent)
+    if proposal.route is Route.PROCEED_SILENTLY:
+        action_id, params = ("email.apply_label", {"label": label_for(hints)}) if chosen else (
+            "email.archive",
+            {},
+        )
+        if action_id == "email.apply_label" and not params["label"]:
+            action_id, params = "email.archive", {}
+        note = f" | filed by the pipeline: no action was named for {hints.intent}"
+    else:
+        action_id, params = "email.create_draft", {}
+        note = " | drafted by the pipeline: no action was named for the ask"
+    if ACTION_TO_TOOL.get(action_id) is None:
+        return proposal
+    return replace(
+        proposal,
+        action_id=action_id,
+        tool_name=tool_for_action(action_id),
+        params=params,
+        rationale=f"{proposal.rationale}{note}",
+    )
+
+
 def _mail_rules(proposal: Proposal, message: Message, hints: Triage) -> Proposal:
     """Everything the mail decides about a proposal, whoever answered."""
-    return _persona_checked(_label_derived(proposal, hints), message, hints)
+    return _persona_checked(_route_work(_label_derived(proposal, hints), hints), message, hints)
 
 
 class ProposalGateway:

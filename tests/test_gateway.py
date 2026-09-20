@@ -103,6 +103,65 @@ def test_no_action_is_the_unsupported_action() -> None:
     assert proposal.tool_name == NO_ACTION_TOOL
 
 
+def test_a_silent_answer_with_no_action_gets_the_pipelines_own_filing() -> None:
+    """'file it and move on' is a decision, and the floor was escalating it.
+
+    A no-action proposal reaches the floor as a tool nobody holds, which fences the mail to
+    an escalation. Every benign notice a small model read that way arrived as a hand-over:
+    a green build became a question for the owner. The pipeline's own filing is derived the
+    same way a label already is, so the route the model named is the route that runs.
+    """
+    mail = message(
+        "builds@buildlark.example",
+        subject="Build #4821 succeeded for techcorp/platform-gateway",
+        body="All 214 tests passed. No action required. - BuildLark CI",
+    )
+    hints = triage(mail)
+    proposal = parse_proposal(valid(action_id=None, params={}), provider="jev")
+    ctx = EmailContext(
+        email_id=mail.message_id,
+        sender=mail.sender.email,
+        recipients=mail.recipients,
+        subject=mail.subject,
+        body=mail.body,
+    )
+    verdict_before = floor_check(
+        ActionPayload(tool_name=proposal.tool_name or "", params={}),
+        email=ctx,
+        user_domain="techcorp.synthetic.example",
+    )
+    assert verdict_before.allowed_routes == (Route.ESCALATE,)
+
+    filled = _mail_rules(proposal, mail, hints)
+    assert filled.route is Route.PROCEED_SILENTLY
+    assert filled.action_id == "email.apply_label"
+    assert filled.params["label"]
+    verdict_after = floor_check(
+        ActionPayload(tool_name=filled.tool_name or "", params=dict(filled.params)),
+        email=ctx,
+        user_domain="techcorp.synthetic.example",
+    )
+    assert Route.PROCEED_SILENTLY in verdict_after.allowed_routes
+    assert len(verdict_after.allowed_routes) == 4
+
+
+def test_an_ask_with_no_action_becomes_the_predraft_it_names() -> None:
+    mail = message(subject="Question about the v1 payment event schema")
+    hints = triage(mail)
+    proposal = parse_proposal(valid(route="ASK_FIRST_WITH_PREDRAFT", action_id=None, params={}))
+    filled = _mail_rules(proposal, mail, hints)
+    assert filled.action_id == "email.create_draft"
+    assert filled.tool_name == "create_draft"
+
+
+def test_an_escalation_still_carries_no_action() -> None:
+    mail = message()
+    hints = triage(mail)
+    proposal = parse_proposal(valid(route="ESCALATE", action_id=None, params={}))
+    filled = _mail_rules(proposal, mail, hints)
+    assert filled.action_id is None and filled.tool_name == NO_ACTION_TOOL
+
+
 def test_a_fenced_answer_parses() -> None:
     assert parse_proposal(f"```json\n{valid()}\n```").route is Route.PROCEED_SILENTLY
 

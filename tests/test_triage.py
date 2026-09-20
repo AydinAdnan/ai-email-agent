@@ -171,6 +171,53 @@ def test_a_machine_notice_that_reports_a_fault_stays_a_notification() -> None:
     assert guess.relationship_class == "self/system notification"
 
 
+def test_a_demand_for_new_bank_details_is_a_payment_request_not_a_question() -> None:
+    """A mail that asks where money should go is a payment request, whatever else it says.
+
+    The class is what a rule gets scoped to, so a phishing invoice read as an"
+    "information request" hands a silence rule the whole mailbox's leftovers.
+    """
+    guess = triage(
+        message(
+            "billing@halvorsen-supply-invoices.example",
+            verified=False,
+            subject="Overdue balance $47,318.62 - INV-88421 - updated remittance details",
+            body=(
+                "Our previous account is now closed, so all remittances must go to the "
+                "details below. Beneficiary: Halvorsen Industrial Supply."
+            ),
+        )
+    )
+    assert guess.intent == "financial request"
+
+
+def test_a_colleague_asking_a_question_is_not_mailbox_hygiene() -> None:
+    """'the cleanup' and a ticket with no number are words a question uses too."""
+    guess = triage(
+        message(
+            "priya.raman@techcorp.synthetic.example",
+            subject="Question about the March 2023 retry queue decision",
+            body=(
+                "There's no linked ticket or ADR for the shim, so we don't remove it by "
+                "mistake during the cleanup. Do you remember the constraint?"
+            ),
+        )
+    )
+    assert guess.intent == "information request"
+
+
+def test_a_named_cloud_invoice_is_a_bill_not_a_receipt() -> None:
+    """Only four providers are named in the marker; the fifth says 'cloud invoice'."""
+    guess = triage(
+        message(
+            "billing@nimbusstack.example",
+            subject="NimbusStack Cloud invoice INV-2025-04-8842 for April 2025",
+            body="Total due: $12,480.00. This amount will be charged automatically.",
+        )
+    )
+    assert guess.intent == "cloud/AWS bill"
+
+
 def test_money_is_read_from_the_mail() -> None:
     assert amount_in("Your receipt from Corner Cafe ($14.50)") == 14.5
     assert amount_in("Total: $1,204.00") == 1204.0

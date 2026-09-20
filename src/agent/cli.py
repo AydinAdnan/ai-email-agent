@@ -235,10 +235,11 @@ def build_parser() -> argparse.ArgumentParser:
     sandbox_run.add_argument(
         "--proposal-timeout",
         type=float,
-        default=60.0,
+        default=120.0,
         help=(
-            "seconds to wait for one proposal: a slow model answers in half a minute, and "
-            "at the gateway's own 20s every proposal would time out and fail closed"
+            "seconds to wait for one proposal: a slow model answers in half a minute and "
+            "sometimes needs longer, and at the gateway's own 20s every proposal would "
+            "time out and fail closed"
         ),
     )
     sandbox_run.add_argument("--no-judge", action="store_true", help="skip the judge")
